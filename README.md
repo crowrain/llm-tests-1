@@ -66,6 +66,9 @@ runs/2026-09-27/
   summary-<model>.json       accuracy by category, throughput, truncation counts
 ```
 
+Model ids that contain path separators or spaces are flattened to `_` in the output
+file names (`org/model` → `results-org_model.jsonl`).
+
 ## Scoring
 
 Extraction is deliberately defensive, because a benchmark that misreads a correct
@@ -86,9 +89,11 @@ escapes, and the last one wins.
 
 **Formatting that is not a real difference.** Numbers compare by value, so `6.00`
 matches `6` and `1/2` matches `0.5`. Multiple-choice accepts both letter and digit
-answer keys, since ARC-Challenge uses each in different rows. GSM8K tries the
-requested `#### n` marker first, then an explicitly stated answer, then any
-trailing number — a marked answer always beats a stray digit.
+answer keys, since ARC-Challenge uses each in different rows, and tolerates a
+trailing sentence period (`Answer: A.` counts as `A`). JSON answers also compare
+by value, so a number the model emits as a string (`"8229"`) still matches `8229`.
+GSM8K tries the requested `#### n` marker first, then an explicitly stated answer,
+then any trailing number — a marked answer always beats a stray digit.
 
 ### Truncation is not wrongness
 
@@ -102,6 +107,14 @@ That is a budget setting, not a quality result, so it is reported separately:
 
 If `wrong_and_truncated` is high, raise `max_tokens` before drawing conclusions
 about the model.
+
+### Failed requests are not wrong answers
+
+In `test_quality_expanded_1.py` a request that still fails after retries is
+recorded with `error` instead of aborting the run, and the summary counts it
+apart: `errors`, plus `accuracy_excluding_errors`, with error records excluded
+from `answer_empty`, `wrong_and_truncated` and `wrong_and_complete`. A request
+failure is an infrastructure event, not a data point about the model.
 
 ## Notes on the long-context cases
 
@@ -117,6 +130,15 @@ exactly one record answers the question.
 
 Changing `NEEDLE_SALT` reissues every archive. Existing `fixtures.json` files keep
 their own labels, so old runs stay comparable.
+
+## Tests
+
+The scoring, extraction and summary helpers are covered by stdlib-only regression
+tests (no endpoint and no network needed):
+
+```bash
+python3 -m unittest discover -v
+```
 
 ## License
 

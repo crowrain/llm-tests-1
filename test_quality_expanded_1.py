@@ -136,8 +136,9 @@ def make_cases() -> list[dict[str, Any]]:
 THINK_CLOSE = re.compile(r"</[^<>]*think[^<>]*>", re.I)
 THINK_OPEN = re.compile(r"<[^<>/]*think[^<>]*>", re.I)
 FENCE = re.compile(r"```[a-zA-Z0-9_+-]*[ \t]*\n?|\n?```")
-# ARC answer keys are letters in most rows and digits in some, so accept both.
-ANSWER_CHOICE = re.compile(r"(?:answer|option)\s*(?:is\s*)?[:\-]?\s*\(?([A-E]|[1-5])\)?(?![\w.])", re.I)
+# ARC/MMLU answer keys are letters in most rows and digits in some, so accept both. A trailing
+# sentence period is common ("Answer: A.") and must not disqualify the match.
+ANSWER_CHOICE = re.compile(r"(?:answer|option)\s*(?:is\s*)?[:\-]?\s*\(?([A-E]|[1-5])\)?\.?(?!\w)", re.I)
 NEEDLE_KEY = re.compile(r"(?:key|label)\s*:\s*(K\d{8}Z)", re.I)
 # Tried in order: the requested `#### n` marker, an explicitly stated answer, then any
 # trailing number. Each fallback is looser, so a marked answer always wins over stray digits.
@@ -213,6 +214,28 @@ def numbers_equal(actual: str, expected: str) -> bool:
         return False
 
 
+# A JSON answer that carries a number as a string ({"seconds": "8229"}) is still the right
+# value, so numeric strings are converted before comparing.
+_INT_RE = re.compile(r"[-+]?\d+")
+_FLOAT_RE = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def normalize_json_values(value: Any) -> Any:
+    """Recursively convert numeric strings to numbers so `42` and `"42"` compare equal."""
+    if isinstance(value, str):
+        text = value.strip()
+        if _INT_RE.fullmatch(text):
+            return int(text)
+        if _FLOAT_RE.fullmatch(text):
+            return float(text)
+        return value
+    if isinstance(value, list):
+        return [normalize_json_values(item) for item in value]
+    if isinstance(value, dict):
+        return {key: normalize_json_values(item) for key, item in value.items()}
+    return value
+
+
 def score(case: dict[str, Any], content: str) -> tuple[bool, str | None]:
     category = case["category"]
     # Reasoning is stripped for every category: a label or digit the model weighed mid-thought
@@ -238,7 +261,7 @@ def score(case: dict[str, Any], content: str) -> tuple[bool, str | None]:
         actual = parse_json_answer(content)
     except Exception:
         return False, None
-    return actual == case["expected"], json.dumps(actual, ensure_ascii=False, sort_keys=True)
+    return normalize_json_values(actual) == normalize_json_values(case["expected"]), json.dumps(actual, ensure_ascii=False, sort_keys=True)
 
 
 def request(base_url: str, model: str, case: dict[str, Any]) -> dict[str, Any]:
@@ -268,14 +291,23 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         rows = [r for r in records if r["category"] == category]
         result["by_category"][category] = {"total": len(rows), "correct": sum(r["correct"] for r in rows), "accuracy": sum(r["correct"] for r in rows) / len(rows), "truncated": sum(1 for r in rows if r.get("truncated")), "median_prefill_tps": median_timing(rows, "prompt_per_second"), "median_decode_tps": median_timing(rows, "predicted_per_second"), "median_elapsed_seconds": statistics.median(r["elapsed_seconds"] for r in rows)}
     # Separate "ran out of tokens before answering" from "answered wrongly": the first is a
-    # budget setting, the second is the model.
+    # budget setting, the second is the model. A request that failed after retries is neither,
+    # so it is counted apart instead of dragging accuracy down silently.
+    result["errors"] = sum(1 for r in records if r.get("error"))
+    clean = [r for r in records if not r.get("error")]
+    result["accuracy_excluding_errors"] = sum(r["correct"] for r in clean) / len(clean) if clean else 0
     result["truncated"] = sum(1 for r in records if r.get("truncated"))
-    result["answer_empty"] = sum(1 for r in records if r.get("answer_empty"))
-    result["wrong_and_truncated"] = sum(1 for r in records if r.get("truncated") and not r["correct"])
-    result["wrong_and_complete"] = sum(1 for r in records if not r.get("truncated") and not r["correct"])
+    result["answer_empty"] = sum(1 for r in clean if r.get("answer_empty"))
+    result["wrong_and_truncated"] = sum(1 for r in clean if r.get("truncated") and not r["correct"])
+    result["wrong_and_complete"] = sum(1 for r in clean if not r.get("truncated") and not r["correct"])
     result["median_prefill_tps"] = median_timing(records, "prompt_per_second")
     result["median_decode_tps"] = median_timing(records, "predicted_per_second")
     return result
+
+
+def model_filename(model: str) -> str:
+    """Keep output names to a single path component: model ids may contain '/' or spaces."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", model)
 
 
 def main() -> None:
@@ -292,7 +324,7 @@ def main() -> None:
         fixture_path.write_text(json.dumps(fixtures, ensure_ascii=False) + "\n")
     else:
         fixtures = json.loads(fixture_path.read_text())
-    results_path = args.output_dir / f"results-{args.model}.jsonl"
+    results_path = args.output_dir / f"results-{model_filename(args.model)}.jsonl"
     records: list[dict[str, Any]] = []
     started = time.monotonic()
     with results_path.open("w", encoding="utf-8") as output:
@@ -317,7 +349,7 @@ def main() -> None:
             print(f"{args.model} {index}/{len(fixtures)} {case['category']} {'OK' if correct else 'FAIL'} elapsed={time.monotonic() - started:.0f}s", flush=True)
     summary = summarize(records)
     summary.update({"model": args.model, "elapsed_seconds": time.monotonic() - started})
-    (args.output_dir / f"summary-{args.model}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    (args.output_dir / f"summary-{model_filename(args.model)}.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(summary, ensure_ascii=False), flush=True)
 
 
