@@ -294,6 +294,61 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(data["a"]["model"], "model-a")
 
 
+class RequestPayloadTests(unittest.TestCase):
+    """The optional sampler fields are sent by default and gateable for strict servers."""
+
+    CASE = {"id": "c1", "category": "arc_challenge", "expected": "A", "prompt": "q", "max_tokens": 32}
+
+    def capture_payload(self, **kwargs):
+        class FakeResponse:
+            def __init__(self, data):
+                self.data = json.dumps(data).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return self.data
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return FakeResponse({"choices": []})
+
+        with mock.patch.object(qc.urllib.request, "urlopen", side_effect=fake_urlopen):
+            qc.request("http://x", "m", self.CASE, **kwargs)
+        return json.loads(captured["req"].data)
+
+    def test_defaults_send_seed_and_reasoning_effort(self):
+        payload = self.capture_payload()
+        self.assertEqual(payload["seed"], 20260926)
+        self.assertEqual(payload["reasoning_effort"], "medium")
+        self.assertEqual(payload["temperature"], 0)
+        self.assertEqual(payload["top_p"], 1)
+        self.assertEqual(payload["max_completion_tokens"], 32)
+
+    def test_seed_can_be_omitted(self):
+        payload = self.capture_payload(send_seed=False)
+        self.assertNotIn("seed", payload)
+        self.assertEqual(payload["reasoning_effort"], "medium")
+
+    def test_reasoning_effort_can_be_omitted(self):
+        payload = self.capture_payload(send_reasoning_effort=False)
+        self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(payload["seed"], 20260926)
+
+    def test_run_cases_passes_payload_flags(self):
+        cases = [{"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32}]
+        with mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}) as fake:
+            qc.run_cases("http://x", "m", cases, io.StringIO(), send_seed=False, send_reasoning_effort=False)
+        self.assertFalse(fake.call_args.kwargs["send_seed"])
+        self.assertFalse(fake.call_args.kwargs["send_reasoning_effort"])
+
+
 class SelectCasesTests(unittest.TestCase):
     def cases(self):
         return [
@@ -432,6 +487,15 @@ class SharedMainTests(unittest.TestCase):
             self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
             summary = json.loads((out_dir / "summary-m.json").read_text())
             self.assertEqual(summary["total"], 2)
+
+    def test_main_omits_optional_payload_fields_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                sys, "argv", ["prog", "--model", "m", "--output-dir", str(tmp), "--no-seed", "--no-reasoning-effort"]
+            ), mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}) as fake:
+                qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+            self.assertFalse(fake.call_args.kwargs["send_seed"])
+            self.assertFalse(fake.call_args.kwargs["send_reasoning_effort"])
 
     def test_resume_rejects_changed_fixtures(self):
         with tempfile.TemporaryDirectory() as tmp:

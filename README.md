@@ -80,6 +80,8 @@ takes the same flags.
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 `reasoning_effort="medium"`; per-case `max_completion_tokens` come from the fixture.
+Servers that reject unknown payload fields (some llama.cpp / vLLM builds) can be
+served with `--no-reasoning-effort` and/or `--no-seed`.
 
 ### Output
 

@@ -275,11 +275,15 @@ def request(
     *,
     timeout: int = 1800,
     retry_delay: float = 5.0,
+    send_seed: bool = True,
+    send_reasoning_effort: bool = True,
 ) -> dict[str, Any]:
     """POST one case to /v1/chat/completions, retrying on any failure.
 
     ``timeout`` bounds each attempt in seconds; ``retry_delay`` is multiplied by the
-    attempt number (1, 2) before sleeping.
+    attempt number (1, 2) before sleeping. ``send_seed`` / ``send_reasoning_effort``
+    gate the optional sampler fields for servers that reject unknown payload keys
+    (some llama.cpp / vLLM builds answer 400 to them).
     """
     payload = {
         "model": model,
@@ -289,10 +293,12 @@ def request(
         ],
         "temperature": 0,
         "top_p": 1,
-        "seed": 20260926,
-        "reasoning_effort": "medium",
         "max_completion_tokens": case["max_tokens"],
     }
+    if send_seed:
+        payload["seed"] = 20260926
+    if send_reasoning_effort:
+        payload["reasoning_effort"] = "medium"
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
@@ -375,6 +381,8 @@ def run_cases(
     retry_delay: float = 5.0,
     tolerate_errors: bool = True,
     skip: frozenset[str] = frozenset(),
+    send_seed: bool = True,
+    send_reasoning_effort: bool = True,
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
     case to ``output``. Returns the records of the cases actually sent.
@@ -400,7 +408,15 @@ def run_cases(
         parsed: Any = None
         error: str | None = None
         try:
-            response = request(base_url, model, case, timeout=timeout, retry_delay=retry_delay)
+            response = request(
+                base_url,
+                model,
+                case,
+                timeout=timeout,
+                retry_delay=retry_delay,
+                send_seed=send_seed,
+                send_reasoning_effort=send_reasoning_effort,
+            )
         except Exception as exc:
             if not tolerate_errors:
                 raise
@@ -551,6 +567,16 @@ def main(
         help="comma-separated fixture categories (exact name or prefix) to run, e.g. 'long_context,mmlu'",
     )
     parser.add_argument("--limit", type=int, help="run at most this many of the selected cases")
+    parser.add_argument(
+        "--no-reasoning-effort",
+        action="store_true",
+        help="do not send reasoning_effort (for servers that reject unknown payload fields)",
+    )
+    parser.add_argument(
+        "--no-seed",
+        action="store_true",
+        help="do not send seed (for servers that reject unknown payload fields)",
+    )
     args = parser.parse_args()
     if args.resume and args.make_fixtures:
         raise SystemExit("--resume cannot be combined with --make-fixtures")
@@ -599,6 +625,8 @@ def main(
             retry_delay=retry_delay,
             tolerate_errors=tolerate_errors,
             skip=frozenset(seen_ids),
+            send_seed=not args.no_seed,
+            send_reasoning_effort=not args.no_reasoning_effort,
         )
     # The summary covers every record, resumed ones included.
     summary = summarize(records)
