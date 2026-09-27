@@ -22,6 +22,28 @@ can be checked out and diffed.
 - HTTP status >= 400 is raised with the response body instead of being
   returned and parsed as a completion (`902bb32`).
 
+- Markdown around the value no longer reads as a missing answer:
+  `Answer: **A**`, `` Key: `K...` `` and `The answer is **42**.` scored as
+  *no answer at all*, because each marker-based pattern required the value
+  immediately after the separator. All three now tolerate emphasis,
+  backticks and quotes; the GSM8K fallback additionally requires a digit in
+  the match, since its character class also matched the lone `.` closing
+  `**42**.` — which, being the last match, won and discarded the real
+  number. The needle pattern keeps its mandatory colon, which is what tells
+  the model's answer line apart from an echoed archive record (`a630873`).
+- A response with no usable choice (`"choices": []`, or a null entry) is
+  recorded as a failed request instead of raising `IndexError` from outside
+  the try block, which aborted even a `tolerate_errors` run (`a630873`).
+- `"message"` or `"timings"` sent as an explicit null no longer crash the
+  record builder or `summarize()`: a `get()` default only covers a missing
+  key, not a key present and null (`a630873`).
+- `fixtures.json` gained a `profile` header and both headers are now
+  enforced on read. Running the expanded harness in a directory an express
+  run had created silently re-ran the 72 express cases and wrote them out
+  as an expanded result; a `version` newer than the harness understands was
+  likewise accepted and read as if it were known. `--make-fixtures` remains
+  the way to rebuild deliberately (`a630873`).
+
 ### Added
 
 - **A/B interleave** (`902bb32`): `--model a,b --base-url u1,u2` runs both
@@ -74,8 +96,11 @@ can be checked out and diffed.
 
 ### Tests
 
-- 65 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
+- 81 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
   scoring, extraction, summarization, filenames, the run loop and CLI
   integration with a mocked request layer, resume, subset selection,
   payload flags, keep-alive connection reuse and error handling,
-  concurrency, and strict interleave.
+  concurrency, and strict interleave. The last 16 cover the four bugs above
+  (a630873): markdown-wrapped answers per category, the forms that must still
+  score wrong so the looser patterns cannot mask a bad answer, degenerate
+  and null-bearing responses, and the fixture version/profile headers.
