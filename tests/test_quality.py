@@ -1061,10 +1061,14 @@ class SharedCaseBuilderTests(unittest.TestCase):
         return [dict(row) for _ in offsets]
 
     def build(self):
-        import test_quality_expanded_1 as expanded
-        import test_quality_express_1 as express
-
+        # The import sits *inside* the mock on purpose. Nothing else in the suite imports the
+        # entry points, so this is the first import of them, and a dataset fetch that ever
+        # moved to module level would run right here -- caught by the fake rather than
+        # reaching the network from a test run.
         with mock.patch.object(qc, "get_rows", side_effect=self.fake_rows):
+            import test_quality_expanded_1 as expanded
+            import test_quality_express_1 as express
+
             return express.make_cases(), expanded.make_cases()
 
     def test_gsm8k_prompt_wording(self):

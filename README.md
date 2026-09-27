@@ -243,8 +243,12 @@ layer is mocked, including the markdown, degenerate-response and fixture-header
 regressions above):
 
 ```bash
-python3 -m unittest discover -v
+python3 -m unittest discover -s tests -t . -v
 ```
+
+`-s tests` is worth keeping: a bare `discover` also matches the harness entry points, whose
+names start with `test_`, and imports them. Nothing breaks today, but it means a dataset
+fetch that ever moved to module level would reach the network from a test run.
 
 They also run automatically on every push to `main` and on pull requests via
 GitHub Actions (Python 3.9 and 3.14, `fail-fast: false`).
