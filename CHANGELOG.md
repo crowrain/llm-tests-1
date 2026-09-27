@@ -44,8 +44,28 @@ can be checked out and diffed.
   likewise accepted and read as if it were known. `--make-fixtures` remains
   the way to rebuild deliberately (`a630873`).
 
+- A run no longer discards a recorded one by accident (`155bcb3`). Without
+  `--resume` the results file is opened `"w"`, so the obvious follow-up to a
+  finished run — re-checking one category with `--categories` — truncated that
+  run's records and overwrote its summary with the subset, silently. A run that
+  would discard recorded cases now stops and names both ways forward;
+  `--overwrite` is how to say "yes, replace it".
+
 ### Added
 
+- **`--api-key`** (`b36f4a7`): bearer-token auth, from the flag or
+  `$OPENAI_API_KEY`, for endpoints that require it (vLLM started with
+  `--api-key`, a hosted provider, a proxy in front of llama.cpp) — previously
+  untestable, though the README promised otherwise. Follows the same per-model
+  rule as `--base-url`, so each side of an interleave can authenticate
+  separately. The key is never written to the log, the records or the summary.
+- **`--overwrite`** (`155bcb3`): replace an existing results file deliberately,
+  the counterpart to the guard above.
+- **Lint configuration** (`8459d6e`): `pyproject.toml` pins the ruff rules
+  (E/W/F, I, UP, bugbear; `target-version = "py39"`), and CI runs them in a
+  separate job on a pinned ruff version. Clearing the 52 over-long lines it
+  found also removed a real test weakness bugbear caught: an
+  `assertRaises(Exception)` where the code raises `RuntimeError`.
 - **A/B interleave** (`902bb32`): `--model a,b --base-url u1,u2` runs both
   models over the same cases in strict alternation (case 1 → a, case 1 → b,
   case 2 → …), one request in flight at a time, so machine drift cannot
@@ -81,6 +101,25 @@ can be checked out and diffed.
 
 ### Changed
 
+- **Prompt wording is now shared** (`dcd0978`): the GSM8K and
+  multiple-choice instruction suffixes, and GSM8K's `#### n` answer parse, were
+  copy-pasted into both entry points, so editing one copy would have moved that
+  profile's cases and left the other's alone — the two harnesses would stop
+  being comparable while every test still passed. `gsm8k_prompt`,
+  `gsm8k_expected`, `choice_prompt` and `letter_labels` now live beside the
+  scorers that consume their output, and a test builds both profiles from one
+  mocked row and asserts the prompts come out identical. With dataset rows
+  mocked, both profiles produce byte-identical case lists to before.
+- **Test discovery is scoped to `tests/`** (`06e56ac`): the entry points match
+  unittest's default `test*.py` pattern, so a bare `discover` imported both on
+  every run. Harmless today, but a dataset fetch that ever moved to module level
+  would reach HuggingFace from CI. CI and the README now use
+  `discover -s tests -t .`, and the one test that does import them does so
+  inside its mock on `get_rows`.
+- Five initializations in `_process_case` that the lines below overwrite
+  unconditionally were dropped (`8459d6e`); `render()` in `compare_quality.py`
+  binds each pair of values once instead of calling `.get` twice per cell, with
+  output verified unchanged on full, empty and partial summaries.
 - **`quality_common.py`** (`30a5a09`): all shared logic — dataset fetching,
   answer extraction, scoring, HTTP layer, summarization, the per-case run
   loop, and the CLI — moved out of the two entry points, which are now thin
@@ -96,11 +135,14 @@ can be checked out and diffed.
 
 ### Tests
 
-- 81 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
+- 111 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
   scoring, extraction, summarization, filenames, the run loop and CLI
   integration with a mocked request layer, resume, subset selection,
   payload flags, keep-alive connection reuse and error handling,
   concurrency, and strict interleave. The last 16 cover the four bugs above
   (a630873): markdown-wrapped answers per category, the forms that must still
   score wrong so the looser patterns cannot mask a bad answer, degenerate
-  and null-bearing responses, and the fixture version/profile headers.
+  and null-bearing responses, and the fixture version/profile headers. Thirty
+  more (`155bcb3`, `b36f4a7`, `dcd0978`) cover the overwrite guard, bearer-token
+  auth end to end including that the key never reaches a record, and the shared
+  prompt builders including that both profiles ask the same question.
