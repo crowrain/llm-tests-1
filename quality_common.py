@@ -497,6 +497,36 @@ def resume_records(results_path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def select_cases(
+    cases: list[dict[str, Any]],
+    categories: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Filter cases by category (exact name or prefix) and/or cap the count, keeping order.
+
+    ``categories`` is a comma-separated list, e.g. ``long_context`` selects all four
+    needle archives; a token that matches no fixture category is an error so a typo
+    cannot silently run an empty or wrong subset.
+    """
+    selected = cases
+    if categories:
+        tokens = [token.strip() for token in categories.split(",") if token.strip()]
+        if not tokens:
+            raise SystemExit("--categories is empty")
+        present = {case["category"] for case in cases}
+        for token in tokens:
+            if not any(category == token or category.startswith(token) for category in present):
+                raise SystemExit(f"no fixture category matches {token!r}; known: {', '.join(sorted(present))}")
+        selected = [case for case in cases if any(case["category"] == token or case["category"].startswith(token) for token in tokens)]
+    if limit is not None:
+        if limit < 1:
+            raise SystemExit("--limit must be at least 1")
+        selected = selected[:limit]
+    if not selected:
+        raise SystemExit("the selected subset is empty")
+    return selected
+
+
 def main(
     make_cases: Callable[[], list[dict[str, Any]]],
     *,
@@ -516,22 +546,30 @@ def main(
         action="store_true",
         help="skip cases already recorded in results-<model>.jsonl and append to that file",
     )
+    parser.add_argument(
+        "--categories",
+        help="comma-separated fixture categories (exact name or prefix) to run, e.g. 'long_context,mmlu'",
+    )
+    parser.add_argument("--limit", type=int, help="run at most this many of the selected cases")
     args = parser.parse_args()
     if args.resume and args.make_fixtures:
         raise SystemExit("--resume cannot be combined with --make-fixtures")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     fixture_path = args.output_dir / "fixtures.json"
     if args.make_fixtures or not fixture_path.exists():
-        write_fixtures(fixture_path, make_cases())
+        all_fixtures = make_cases()
+        write_fixtures(fixture_path, all_fixtures)
     else:
-        fixtures = load_fixtures(fixture_path)
+        all_fixtures = load_fixtures(fixture_path)
 
     results_path = args.output_dir / f"results-{model_filename(args.model)}.jsonl"
     records: list[dict[str, Any]] = []
     if args.resume:
         records = resume_records(results_path)
         seen_ids = {record["id"] for record in records}
-        unknown = sorted(seen_ids - {case["id"] for case in fixtures})
+        # Guard against the FULL fixture set: a --categories subset is a narrower view of
+        # the same fixtures, not a fixture change.
+        unknown = sorted(seen_ids - {case["id"] for case in all_fixtures})
         if unknown:
             raise SystemExit(
                 f"{results_path.name} contains {len(unknown)} case(s) not in the current fixtures "
@@ -542,6 +580,14 @@ def main(
     else:
         seen_ids = set()
         mode = "w"
+    fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
+    if len(fixtures) != len(all_fixtures):
+        parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
+        if args.categories:
+            parts.append(f"categories={args.categories}")
+        if args.limit:
+            parts.append(f"limit={args.limit}")
+        print(f"{args.model} {' '.join(parts)}", flush=True)
     started = time.monotonic()
     with results_path.open(mode, encoding="utf-8") as output:
         records = records + run_cases(

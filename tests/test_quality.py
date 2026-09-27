@@ -294,6 +294,49 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(data["a"]["model"], "model-a")
 
 
+class SelectCasesTests(unittest.TestCase):
+    def cases(self):
+        return [
+            {"id": f"g{i}", "category": "gsm8k"} for i in range(3)
+        ] + [
+            {"id": f"n_{label}", "category": f"long_context_{label}"} for label in ("16k", "64k")
+        ] + [{"id": "if_01", "category": "instruction_json"}]
+
+    def test_no_filters_returns_all_in_order(self):
+        self.assertEqual([c["id"] for c in qc.select_cases(self.cases())], ["g0", "g1", "g2", "n_16k", "n_64k", "if_01"])
+
+    def test_exact_category(self):
+        self.assertEqual([c["id"] for c in qc.select_cases(self.cases(), categories="gsm8k")], ["g0", "g1", "g2"])
+
+    def test_prefix_matches_all_needle_archives(self):
+        self.assertEqual(
+            [c["category"] for c in qc.select_cases(self.cases(), categories="long_context")],
+            ["long_context_16k", "long_context_64k"],
+        )
+
+    def test_multiple_categories(self):
+        self.assertEqual(len(qc.select_cases(self.cases(), categories="gsm8k, instruction_json")), 4)
+
+    def test_unknown_category_is_an_error(self):
+        with self.assertRaises(SystemExit):
+            qc.select_cases(self.cases(), categories="gg")
+
+    def test_empty_categories_is_an_error(self):
+        with self.assertRaises(SystemExit):
+            qc.select_cases(self.cases(), categories=" , ")
+
+    def test_limit_caps_in_fixture_order(self):
+        self.assertEqual([c["id"] for c in qc.select_cases(self.cases(), limit=2)], ["g0", "g1"])
+
+    def test_limit_applies_after_categories(self):
+        selected = qc.select_cases(self.cases(), categories="long_context,gsm8k", limit=2)
+        self.assertEqual([c["id"] for c in selected], ["g0", "g1"])
+
+    def test_zero_limit_is_an_error(self):
+        with self.assertRaises(SystemExit):
+            qc.select_cases(self.cases(), limit=0)
+
+
 class SharedMainTests(unittest.TestCase):
     """The shared CLI (fixtures, resume, results + summary), fully offline."""
 
@@ -337,6 +380,58 @@ class SharedMainTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", "/tmp/none", "--resume", "--make-fixtures"]):
             with self.assertRaises(SystemExit):
                 qc.main(lambda: [], timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+
+    def test_main_runs_only_selected_categories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fixtures = [
+                {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+                {"id": "c2", "category": "long_context_16k", "expected": "K00000001Z", "max_tokens": 32},
+            ]
+            sent: list[str] = []
+
+            def fake_request(base_url, model, case, **kwargs):
+                sent.append(case["id"])
+                return {
+                    "choices": [{"message": {"content": "Answer: A. Key: K00000001Z", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "usage": None,
+                    "timings": {},
+                }
+
+            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--categories", "long_context"]), mock.patch.object(
+                qc, "request", side_effect=fake_request
+            ):
+                qc.main(lambda: fixtures, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+            self.assertEqual(sent, ["c2"])
+            summary = json.loads((out_dir / "summary-m.json").read_text())
+            self.assertEqual(summary["total"], 1)
+
+    def test_resume_with_category_filter_keeps_prior_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            # c1 was already recorded in a previous run; resume restricted to arc_challenge.
+            qc.write_fixtures(out_dir / "fixtures.json", self.fixtures())
+            (out_dir / "results-m.jsonl").write_text(
+                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, "answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
+            )
+
+            def fake_request(base_url, model, case, **kwargs):
+                self.assertEqual(case["id"], "c2")
+                return {
+                    "choices": [{"message": {"content": "Answer: B.", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "usage": None,
+                    "timings": {},
+                }
+
+            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume", "--categories", "arc_challenge"]), mock.patch.object(
+                qc, "request", side_effect=fake_request
+            ):
+                qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+
+            lines = [json.loads(line) for line in (out_dir / "results-m.jsonl").read_text().splitlines() if line.strip()]
+            self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
+            summary = json.loads((out_dir / "summary-m.json").read_text())
+            self.assertEqual(summary["total"], 2)
 
     def test_resume_rejects_changed_fixtures(self):
         with tempfile.TemporaryDirectory() as tmp:

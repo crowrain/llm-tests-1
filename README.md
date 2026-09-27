@@ -60,12 +60,21 @@ python3 test_quality_express_1.py \
 
 # a crashed or interrupted run continues where it stopped
 python3 test_quality_express_1.py --model my-model-a --output-dir runs/2026-09-27 --resume
+
+# only the long-context archives (or cap any run with --limit 10)
+python3 test_quality_expanded_1.py --model my-model-b --output-dir runs/2026-09-27 \
+  --categories long_context
 ```
 
 `--make-fixtures` forces a rebuild. `--resume` skips cases already recorded in
 `results-<model>.jsonl` (a torn final line left by a crash is dropped) and rebuilds
 the summary over all records; it refuses to run if the recorded cases no longer
 match the current fixtures, and cannot be combined with `--make-fixtures`.
+`--categories` restricts the run to fixture categories — exact names or prefixes,
+comma-separated (`long_context` selects all four needle archives); a token that
+matches nothing is an error, so a typo cannot silently run an empty subset.
+`--limit N` caps the run to the first N selected cases (fixture order). Both
+combine with `--resume`: already-recorded cases stay skipped.
 `--base-url` defaults to `http://127.0.0.1:8080`. `test_quality_expanded_1.py`
 takes the same flags.
 
