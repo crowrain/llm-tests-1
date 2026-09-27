@@ -35,62 +35,99 @@ SYSTEM = (
 INSTRUCTION_CASES: list[dict[str, Any]] = [
     {
         "id": "if_01",
-        "prompt": "Return only valid JSON, with no Markdown: an object whose keys are `largest`, `smallest`, and `sum`, for the integers [17, -4, 29, 0].",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: an object whose keys are `largest`, "
+            "`smallest`, and `sum`, for the integers [17, -4, 29, 0]."
+        ),
         "expected": {"largest": 29, "smallest": -4, "sum": 42},
     },
     {
         "id": "if_02",
-        "prompt": "Return only valid JSON, with no Markdown: sort these strings by length ascending and then alphabetically: [\"pear\", \"fig\", \"apple\", \"plum\"]. Use key `ordered`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: sort these strings by length ascending and "
+            "then alphabetically: [\"pear\", \"fig\", \"apple\", \"plum\"]. Use key `ordered`."
+        ),
         "expected": {"ordered": ["fig", "pear", "plum", "apple"]},
     },
     {
         "id": "if_03",
-        "prompt": "Return only valid JSON, with no Markdown: from [3, 3, 7, 2, 7, 7, 5], return the distinct values in first-appearance order under key `values` and their count under key `count`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: from [3, 3, 7, 2, 7, 7, 5], return the "
+            "distinct values in first-appearance order under key `values` and their count under key "
+            "`count`."
+        ),
         "expected": {"values": [3, 7, 2, 5], "count": 4},
     },
     {
         "id": "if_04",
-        "prompt": "Return only valid JSON, with no Markdown: convert 2 hours, 17 minutes, and 9 seconds to seconds. Use exactly one numeric key named `seconds`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: convert 2 hours, 17 minutes, and 9 seconds to "
+            "seconds. Use exactly one numeric key named `seconds`."
+        ),
         "expected": {"seconds": 8229},
     },
     {
         "id": "if_05",
-        "prompt": "Return only valid JSON, with no Markdown: extract the unique uppercase letters from `aBcdEFBaG`, sorted alphabetically, under key `letters`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: extract the unique uppercase letters from "
+            "`aBcdEFBaG`, sorted alphabetically, under key `letters`."
+        ),
         "expected": {"letters": ["B", "E", "F", "G"]},
     },
     {
         "id": "if_06",
-        "prompt": "Return only valid JSON, with no Markdown: a rectangle has width 13 and height 8. Return its area and perimeter with exactly the keys `area` and `perimeter`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: a rectangle has width 13 and height 8. Return "
+            "its area and perimeter with exactly the keys `area` and `perimeter`."
+        ),
         "expected": {"area": 104, "perimeter": 42},
     },
     {
         "id": "if_07",
-        "prompt": "Return only valid JSON, with no Markdown: for the word `mississippi`, count each character. Use an object under key `counts` with keys m, i, s, p.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: for the word `mississippi`, count each "
+            "character. Use an object under key `counts` with keys m, i, s, p."
+        ),
         "expected": {"counts": {"m": 1, "i": 4, "s": 4, "p": 2}},
     },
     {
         "id": "if_08",
-        "prompt": "Return only valid JSON, with no Markdown: calculate the median and arithmetic mean of [2, 5, 9, 12]. Use exactly keys `median` and `mean`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: calculate the median and arithmetic mean of "
+            "[2, 5, 9, 12]. Use exactly keys `median` and `mean`."
+        ),
         "expected": {"median": 7, "mean": 7},
     },
     {
         "id": "if_09",
-        "prompt": "Return only valid JSON, with no Markdown: a price of 250 is discounted by 12% and then taxed by 10%. Return the final price under key `final_price`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: a price of 250 is discounted by 12% and then "
+            "taxed by 10%. Return the final price under key `final_price`."
+        ),
         "expected": {"final_price": 242},
     },
     {
         "id": "if_10",
-        "prompt": "Return only valid JSON, with no Markdown: reverse the words in `red green blue yellow` and return them as an array under key `words`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: reverse the words in `red green blue yellow` "
+            "and return them as an array under key `words`."
+        ),
         "expected": {"words": ["yellow", "blue", "green", "red"]},
     },
     {
         "id": "if_11",
-        "prompt": "Return only valid JSON, with no Markdown: list the prime numbers from 10 through 25 inclusive under key `primes`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: list the prime numbers from 10 through 25 "
+            "inclusive under key `primes`."
+        ),
         "expected": {"primes": [11, 13, 17, 19, 23]},
     },
     {
         "id": "if_12",
-        "prompt": "Return only valid JSON, with no Markdown: convert the Roman numeral XLIV to an integer under key `value`.",
+        "prompt": (
+            "Return only valid JSON, with no Markdown: convert the Roman numeral XLIV to an integer "
+            "under key `value`."
+        ),
         "expected": {"value": 44},
     },
 ]
@@ -320,7 +357,7 @@ def score(case: dict[str, Any], content: str) -> tuple[bool, str | None]:
 _LOCAL = threading.local()
 
 
-def _connections() -> dict[tuple, "http.client.HTTPConnection"]:
+def _connections() -> dict[tuple, http.client.HTTPConnection]:
     if not hasattr(_LOCAL, "conns"):
         _LOCAL.conns = {}
     return _LOCAL.conns
@@ -489,11 +526,7 @@ def _process_case(
     """Request one case and score the answer. Pure worker: no file I/O, safe to run in
     threads. Returns the record for the case."""
     began = time.monotonic()
-    content = ""
-    reasoning_content: Any = None
-    finish_reason: Any = None
-    usage: Any = None
-    timings: dict[str, Any] = {}
+    # Only these three need a default: the response fields below are assigned either way.
     correct = False
     parsed: Any = None
     error: str | None = None
@@ -553,7 +586,15 @@ def _process_case(
     }
 
 
-def _emit(output: TextIO, model: str, done: int, total: int, case: dict[str, Any], record: dict[str, Any], started: float) -> None:
+def _emit(
+    output: TextIO,
+    model: str,
+    done: int,
+    total: int,
+    case: dict[str, Any],
+    record: dict[str, Any],
+    started: float,
+) -> None:
     """Stream one record and a progress line. Crash-safe: each record lands on its own
     flushed line, which is what makes --resume possible."""
     output.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -594,7 +635,11 @@ def run_cases(
     if skip:
         print(f"{model} resuming: {len(skip)} of {len(cases)} cases already recorded, skipping them", flush=True)
     if concurrency > 1:
-        print(f"{model} concurrency={concurrency}: requests overlap, per-case elapsed_seconds is a load number, not a latency", flush=True)
+        print(
+            f"{model} concurrency={concurrency}: requests overlap, per-case elapsed_seconds "
+            f"is a load number, not a latency",
+            flush=True,
+        )
     records: list[dict[str, Any]] = []
     started = time.monotonic()
     worker_kwargs = dict(
@@ -648,7 +693,11 @@ def run_cases_interleaved(
     pending_by_model = {model: [case for case in cases if case["id"] not in skip_by_model[model]] for model in models}
     for model in models:
         if skip_by_model[model]:
-            print(f"{model} resuming: {len(skip_by_model[model])} of {len(cases)} cases already recorded, skipping them", flush=True)
+            print(
+                f"{model} resuming: {len(skip_by_model[model])} of {len(cases)} cases "
+                f"already recorded, skipping them",
+                flush=True,
+            )
     keys = api_keys if api_keys is not None else [None] * len(models)
     started = time.monotonic()
     for case in cases:
@@ -666,7 +715,15 @@ def run_cases_interleaved(
                 send_reasoning_effort=send_reasoning_effort,
                 api_key=api_key,
             )
-            _emit(outputs[model], model, len(records_by_model[model]) + 1, len(pending_by_model[model]), case, record, started)
+            _emit(
+                outputs[model],
+                model,
+                len(records_by_model[model]) + 1,
+                len(pending_by_model[model]),
+                case,
+                record,
+                started,
+            )
             records_by_model[model].append(record)
     return records_by_model
 
@@ -773,7 +830,11 @@ def select_cases(
         for token in tokens:
             if not any(category == token or category.startswith(token) for category in present):
                 raise SystemExit(f"no fixture category matches {token!r}; known: {', '.join(sorted(present))}")
-        selected = [case for case in cases if any(case["category"] == token or case["category"].startswith(token) for token in tokens)]
+        selected = [
+            case
+            for case in cases
+            if any(case["category"] == token or case["category"].startswith(token) for token in tokens)
+        ]
     if limit is not None:
         if limit < 1:
             raise SystemExit("--limit must be at least 1")
@@ -818,7 +879,11 @@ def main(
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--model", required=True, help="model id, or comma-separated ids for an A/B interleave")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080", help="endpoint, or comma-separated endpoints matching --model")
+    parser.add_argument(
+        "--base-url",
+        default="http://127.0.0.1:8080",
+        help="endpoint, or comma-separated endpoints matching --model",
+    )
     parser.add_argument("--make-fixtures", action="store_true")
     parser.add_argument(
         "--resume",
@@ -942,7 +1007,11 @@ def main(
                 api_key=api_keys[0],
             )
         else:
-            print(f"interleaving {len(models)} models: each case goes to every model in turn, one request at a time", flush=True)
+            print(
+                f"interleaving {len(models)} models: each case goes to every model in turn, "
+                f"one request at a time",
+                flush=True,
+            )
             new_records = run_cases_interleaved(
                 base_urls,
                 models,

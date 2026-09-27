@@ -28,3 +28,22 @@ jobs:
       # -t . keeps the repository root importable, for `import quality_common`.
       - name: Run regression tests
         run: python -m unittest discover -s tests -t . -v
+
+  # Ruff is a standalone binary, so one job covers the whole matrix. The version is pinned:
+  # an unpinned lint that gains rules on its own release turns someone else's push red.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install ruff
+        run: pip install ruff==0.15.8
+
+      - name: Lint
+        run: ruff check .

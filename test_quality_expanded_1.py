@@ -65,7 +65,15 @@ def make_long_case(label: str, char_budget: int, fraction: float) -> dict[str, A
         "End with exactly `Key: <label>` and no alternative label."
     )
     # 256 truncated the deepest archive mid-answer; the 180k tiebreak needed 282 tokens.
-    return {"id": f"needle_{label}", "category": f"long_context_{label}", "prompt": prompt, "expected": expected, "max_tokens": 768, "approx_chars": len(prompt), "target_record": target}
+    return {
+        "id": f"needle_{label}",
+        "category": f"long_context_{label}",
+        "prompt": prompt,
+        "expected": expected,
+        "max_tokens": 768,
+        "approx_chars": len(prompt),
+        "target_record": target,
+    }
 
 
 def make_cases() -> list[dict[str, Any]]:
@@ -128,5 +136,8 @@ if __name__ == "__main__":
         retry_delay=5.0,
         tolerate_errors=True,
         profile="expanded",
-        description="Expanded profile: 266 cases including MMLU and long-context needles; a failed request is recorded.",
+        description=(
+            "Expanded profile: 266 cases including MMLU and long-context needles; "
+            "a failed request is recorded."
+        ),
     )

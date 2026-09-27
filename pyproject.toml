@@ -1,0 +1,19 @@
+# The harnesses are stdlib-only scripts with nothing to install, so there is deliberately no
+# [build-system] and no dependencies here: this file exists to pin the lint rules CI enforces,
+# in one place a contributor can read before sending a change.
+
+[tool.ruff]
+line-length = 120
+# The documented minimum, matching the floor of the CI test matrix. It keeps the version-aware
+# rules (UP) from suggesting syntax that 3.9 cannot run.
+target-version = "py39"
+
+[tool.ruff.lint]
+# E/W/F are the pycodestyle and pyflakes basics; I sorts imports; UP catches syntax the
+# supported range has outgrown; B is flake8-bugbear, which found a test asserting the bare
+# Exception where it meant RuntimeError.
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+# Two blank lines after the import block, which is the style the code already used.
+lines-after-imports = 2

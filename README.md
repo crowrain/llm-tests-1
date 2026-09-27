@@ -38,7 +38,8 @@ prompt, which a test asserts.
 ## Requirements
 
 - Python 3.9+, standard library only — no dependencies to install. CI runs the
-  test suite on the supported range's ends: 3.9 and 3.14.
+  test suite on the supported range's ends: 3.9 and 3.14. `ruff` is needed only to
+  lint a change, never to run a benchmark.
 - Network access to `datasets-server.huggingface.co` to build fixtures the first
   time. After that `fixtures.json` is reused and the run is offline apart from the
   endpoint itself.
@@ -238,7 +239,7 @@ their own labels, so old runs stay comparable.
 
 The scoring, extraction, summary, run-loop, HTTP-layer and CLI (fixtures, resume,
 subset selection, payload flags, concurrency, interleave) helpers are covered by
-81 stdlib-only regression tests (no endpoint and no network needed — the request
+111 stdlib-only regression tests (no endpoint and no network needed — the request
 layer is mocked, including the markdown, degenerate-response and fixture-header
 regressions above):
 
@@ -250,8 +251,14 @@ python3 -m unittest discover -s tests -t . -v
 names start with `test_`, and imports them. Nothing breaks today, but it means a dataset
 fetch that ever moved to module level would reach the network from a test run.
 
-They also run automatically on every push to `main` and on pull requests via
-GitHub Actions (Python 3.9 and 3.14, `fail-fast: false`).
+Lint rules live in `pyproject.toml` and are enforced with [ruff](https://docs.astral.sh/ruff/):
+
+```bash
+ruff check .
+```
+
+Both run automatically on every push to `main` and on pull requests via GitHub Actions:
+the tests on Python 3.9 and 3.14 (`fail-fast: false`), the lint once, on a pinned ruff.
 
 ## Changelog
 

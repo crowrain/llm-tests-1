@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest import mock
 
@@ -102,9 +103,13 @@ class SummaryTests(unittest.TestCase):
 
     def make_records(self):
         return [
-            {"id": "a", "category": "gsm8k", "correct": True, "truncated": False, "answer_empty": False, "timings": {}, "elapsed_seconds": 1.0},
-            {"id": "b", "category": "gsm8k", "correct": False, "truncated": False, "answer_empty": False, "timings": {}, "elapsed_seconds": 2.0},
-            {"id": "c", "category": "gsm8k", "correct": False, "truncated": False, "answer_empty": True, "timings": {}, "elapsed_seconds": 3.0, "error": "RuntimeError('boom')"},
+            {"id": "a", "category": "gsm8k", "correct": True, "truncated": False,
+             "answer_empty": False, "timings": {}, "elapsed_seconds": 1.0},
+            {"id": "b", "category": "gsm8k", "correct": False, "truncated": False,
+             "answer_empty": False, "timings": {}, "elapsed_seconds": 2.0},
+            {"id": "c", "category": "gsm8k", "correct": False, "truncated": False,
+             "answer_empty": True, "timings": {}, "elapsed_seconds": 3.0,
+             "error": "RuntimeError('boom')"},
         ]
 
     def test_failed_request_is_counted_apart(self):
@@ -228,7 +233,8 @@ class ResumeTests(unittest.TestCase):
 
     def test_summarize_tolerates_records_without_elapsed_seconds(self):
         # --resume of a results file written before elapsed_seconds existed.
-        record = {"id": "a", "category": "gsm8k", "correct": True, "truncated": False, "answer_empty": False, "timings": {}}
+        record = {"id": "a", "category": "gsm8k", "correct": True, "truncated": False,
+                  "answer_empty": False, "timings": {}}
         summary = qc.summarize([record])
         self.assertEqual(summary["by_category"]["gsm8k"]["median_elapsed_seconds"], None)
 
@@ -258,7 +264,10 @@ class CompareTests(unittest.TestCase):
         }
 
     def test_render_reports_models_and_deltas(self):
-        text = cq.render("model-a", self.make_summary("model-a", 0.8, 50.0), "model-b", self.make_summary("model-b", 0.7, 40.0))
+        text = cq.render(
+            "model-a", self.make_summary("model-a", 0.8, 50.0),
+            "model-b", self.make_summary("model-b", 0.7, 40.0),
+        )
         self.assertIn("model-a vs model-b", text)
         self.assertIn("-10.0 pp", text)  # gsm8k: 70% − 80%
         self.assertIn("-20.0%", text)  # decode: (40 − 50) / 50
@@ -289,7 +298,10 @@ class CompareTests(unittest.TestCase):
                 cq.resolve([Path(tmp)])
 
     def test_as_json_deltas(self):
-        data = cq.as_json("model-a", self.make_summary("model-a", 0.8, 50.0), "model-b", self.make_summary("model-b", 0.7, 40.0))
+        data = cq.as_json(
+            "model-a", self.make_summary("model-a", 0.8, 50.0),
+            "model-b", self.make_summary("model-b", 0.7, 40.0),
+        )
         self.assertAlmostEqual(data["delta_accuracy"], -0.1)
         self.assertAlmostEqual(data["by_category"]["gsm8k"]["delta"], -0.1)
         self.assertEqual(data["a"]["model"], "model-a")
@@ -331,8 +343,11 @@ class RequestPayloadTests(unittest.TestCase):
 
     def test_run_cases_passes_payload_flags(self):
         cases = [{"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32}]
-        with mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}) as fake:
-            qc.run_cases("http://x", "m", cases, io.StringIO(), send_seed=False, send_reasoning_effort=False)
+        answer = {"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}
+        with mock.patch.object(qc, "request", return_value=answer) as fake:
+            qc.run_cases(
+                "http://x", "m", cases, io.StringIO(), send_seed=False, send_reasoning_effort=False
+            )
         self.assertFalse(fake.call_args.kwargs["send_seed"])
         self.assertFalse(fake.call_args.kwargs["send_reasoning_effort"])
 
@@ -458,7 +473,7 @@ class InterleaveTests(unittest.TestCase):
     def test_strict_alternation_and_per_model_outputs(self):
         calls: list = []
         outputs = {"model-a": io.StringIO(), "model-b": io.StringIO()}
-        with mock.patch.object(qc, "request", side_effect=lambda base_url, model, case, **kw: self.fake_request(calls, base_url, model, case, **kw)):
+        with mock.patch.object(qc, "request", side_effect=partial(self.fake_request, calls)):
             records = qc.run_cases_interleaved(
                 self.URLS, self.MODELS, self.CASES, outputs,
                 timeout=1, retry_delay=0.01, tolerate_errors=True,
@@ -472,7 +487,7 @@ class InterleaveTests(unittest.TestCase):
     def test_skip_is_per_model(self):
         calls: list = []
         outputs = {model: io.StringIO() for model in self.MODELS}
-        with mock.patch.object(qc, "request", side_effect=lambda base_url, model, case, **kw: self.fake_request(calls, base_url, model, case, **kw)):
+        with mock.patch.object(qc, "request", side_effect=partial(self.fake_request, calls)):
             qc.run_cases_interleaved(
                 self.URLS, self.MODELS, self.CASES, outputs,
                 timeout=1, retry_delay=0.01, tolerate_errors=True,
@@ -490,7 +505,10 @@ class SelectCasesTests(unittest.TestCase):
         ] + [{"id": "if_01", "category": "instruction_json"}]
 
     def test_no_filters_returns_all_in_order(self):
-        self.assertEqual([c["id"] for c in qc.select_cases(self.cases())], ["g0", "g1", "g2", "n_16k", "n_64k", "if_01"])
+        self.assertEqual(
+            [c["id"] for c in qc.select_cases(self.cases())],
+            ["g0", "g1", "g2", "n_16k", "n_64k", "if_01"],
+        )
 
     def test_exact_category(self):
         self.assertEqual([c["id"] for c in qc.select_cases(self.cases(), categories="gsm8k")], ["g0", "g1", "g2"])
@@ -539,7 +557,8 @@ class SharedMainTests(unittest.TestCase):
             # First "run": c1 completed, then a crash left a torn line for c2.
             qc.write_fixtures(out_dir / "fixtures.json", self.fixtures())
             (out_dir / "results-m.jsonl").write_text(
-                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, "answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
+                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, '
+                '"answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
                 '{"id": "c2", "correct": fa'
             )
 
@@ -547,24 +566,30 @@ class SharedMainTests(unittest.TestCase):
                 if case["id"] == "c1":
                     raise AssertionError("c1 must be skipped on resume")
                 return {
-                    "choices": [{"message": {"content": "Answer: B.", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "choices": [
+                        {"message": {"content": "Answer: B.", "reasoning_content": None},
+                         "finish_reason": "stop"}
+                    ],
                     "usage": None,
                     "timings": {},
                 }
 
-            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume"]), mock.patch.object(
+            argv = ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
                 qc, "request", side_effect=fake_request
             ):
                 qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
-            lines = [json.loads(line) for line in (out_dir / "results-m.jsonl").read_text().splitlines() if line.strip()]
+            text = (out_dir / "results-m.jsonl").read_text()
+            lines = [json.loads(line) for line in text.splitlines() if line.strip()]
             self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
             summary = json.loads((out_dir / "summary-m.json").read_text())
             self.assertEqual(summary["total"], 2)
             self.assertEqual(summary["correct"], 2)
 
     def test_resume_rejects_make_fixtures(self):
-        with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", "/tmp/none", "--resume", "--make-fixtures"]):
+        argv = ["prog", "--model", "m", "--output-dir", "/tmp/none", "--resume", "--make-fixtures"]
+        with mock.patch.object(sys, "argv", argv):
             with self.assertRaises(SystemExit):
                 qc.main(lambda: [], timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
@@ -580,12 +605,18 @@ class SharedMainTests(unittest.TestCase):
             def fake_request(base_url, model, case, **kwargs):
                 sent.append(case["id"])
                 return {
-                    "choices": [{"message": {"content": "Answer: A. Key: K00000001Z", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "choices": [
+                        {"message": {"content": "Answer: A. Key: K00000001Z",
+                                     "reasoning_content": None},
+                         "finish_reason": "stop"}
+                    ],
                     "usage": None,
                     "timings": {},
                 }
 
-            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--categories", "long_context"]), mock.patch.object(
+            argv = ["prog", "--model", "m", "--output-dir", str(out_dir),
+                    "--categories", "long_context"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
                 qc, "request", side_effect=fake_request
             ):
                 qc.main(lambda: fixtures, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
@@ -599,23 +630,30 @@ class SharedMainTests(unittest.TestCase):
             # c1 was already recorded in a previous run; resume restricted to arc_challenge.
             qc.write_fixtures(out_dir / "fixtures.json", self.fixtures())
             (out_dir / "results-m.jsonl").write_text(
-                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, "answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
+                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, '
+                '"answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
             )
 
             def fake_request(base_url, model, case, **kwargs):
                 self.assertEqual(case["id"], "c2")
                 return {
-                    "choices": [{"message": {"content": "Answer: B.", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "choices": [
+                        {"message": {"content": "Answer: B.", "reasoning_content": None},
+                         "finish_reason": "stop"}
+                    ],
                     "usage": None,
                     "timings": {},
                 }
 
-            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume", "--categories", "arc_challenge"]), mock.patch.object(
+            argv = ["prog", "--model", "m", "--output-dir", str(out_dir),
+                    "--resume", "--categories", "arc_challenge"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
                 qc, "request", side_effect=fake_request
             ):
                 qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
-            lines = [json.loads(line) for line in (out_dir / "results-m.jsonl").read_text().splitlines() if line.strip()]
+            text = (out_dir / "results-m.jsonl").read_text()
+            lines = [json.loads(line) for line in text.splitlines() if line.strip()]
             self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
             summary = json.loads((out_dir / "summary-m.json").read_text())
             self.assertEqual(summary["total"], 2)
@@ -641,7 +679,11 @@ class SharedMainTests(unittest.TestCase):
             with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request):
                 qc.main(lambda: fixtures, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
             # Strict alternation: case 1 to both, then case 2 to both, one request at a time.
-            self.assertEqual(calls, [("http://a", "a", "c1"), ("http://b", "b", "c1"), ("http://a", "a", "c2"), ("http://b", "b", "c2")])
+            self.assertEqual(
+                calls,
+                [("http://a", "a", "c1"), ("http://b", "b", "c1"),
+                 ("http://a", "a", "c2"), ("http://b", "b", "c2")],
+            )
             for model in ("a", "b"):
                 lines = (out_dir / f"results-{model}.jsonl").read_text().splitlines()
                 self.assertEqual(len(lines), 2)
@@ -659,10 +701,16 @@ class SharedMainTests(unittest.TestCase):
 
     def test_main_omits_optional_payload_fields_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                sys, "argv", ["prog", "--model", "m", "--output-dir", str(tmp), "--no-seed", "--no-reasoning-effort"]
-            ), mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}) as fake:
-                qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+            answer = {"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}
+            argv = ["prog", "--model", "m", "--output-dir", str(tmp),
+                    "--no-seed", "--no-reasoning-effort"]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                qc, "request", return_value=answer
+            ) as fake:
+                qc.main(
+                    lambda: self.fixtures(), timeout=1, retry_delay=0.01,
+                    tolerate_errors=True, description="t",
+                )
             self.assertFalse(fake.call_args.kwargs["send_seed"])
             self.assertFalse(fake.call_args.kwargs["send_reasoning_effort"])
 
@@ -747,7 +795,7 @@ class NoUsableChoiceTests(unittest.TestCase):
                 self.assertIsNotNone(self.process(response)["error"])
 
     def test_no_usable_choice_aborts_when_intolerated(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(RuntimeError):
             self.process({"choices": []}, tolerate_errors=False)
 
     def test_null_message_and_timings_do_not_crash(self):
@@ -940,7 +988,8 @@ class ApiKeyTests(unittest.TestCase):
         self.assertNotIn("Authorization", self.FakeConn.headers[0])
 
     def test_run_cases_forwards_the_key(self):
-        with mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}}]}) as fake:
+        answer = {"choices": [{"message": {"content": "Answer: A."}}]}
+        with mock.patch.object(qc, "request", return_value=answer) as fake:
             qc.run_cases(self.BASE, "m", [dict(self.CASE)], io.StringIO(), api_key=self.KEY)
         self.assertEqual(fake.call_args.kwargs["api_key"], self.KEY)
 

@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+
 Pair = tuple[str, dict[str, Any]]
 
 
@@ -97,23 +98,34 @@ def render(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) -
         return f"  {label:<16} {a:<{width}} {b:<{width}} {delta}"
 
     lines.append("Overall")
-    lines.append(row("accuracy", _pct(s_a.get("accuracy")), _pct(s_b.get("accuracy")), _pp(s_a.get("accuracy"), s_b.get("accuracy"))))
-    lines.append(row("correct", f"{_count(s_a.get('correct'))}/{_count(s_a.get('total'))}", f"{_count(s_b.get('correct'))}/{_count(s_b.get('total'))}"))
-    lines.append(row("truncated", _count(s_a.get("truncated")), _count(s_b.get("truncated")), _signed(s_a.get("truncated"), s_b.get("truncated"))))
-    lines.append(row("errors", _count(s_a.get("errors")), _count(s_b.get("errors")), _signed(s_a.get("errors"), s_b.get("errors"))))
+    acc_a, acc_b = s_a.get("accuracy"), s_b.get("accuracy")
+    lines.append(row("accuracy", _pct(acc_a), _pct(acc_b), _pp(acc_a, acc_b)))
+    lines.append(
+        row(
+            "correct",
+            f"{_count(s_a.get('correct'))}/{_count(s_a.get('total'))}",
+            f"{_count(s_b.get('correct'))}/{_count(s_b.get('total'))}",
+        )
+    )
+    trunc_a, trunc_b = s_a.get("truncated"), s_b.get("truncated")
+    lines.append(row("truncated", _count(trunc_a), _count(trunc_b), _signed(trunc_a, trunc_b)))
+    err_a, err_b = s_a.get("errors"), s_b.get("errors")
+    lines.append(row("errors", _count(err_a), _count(err_b), _signed(err_a, err_b)))
     lines.append("")
     lines.append("By category (accuracy, Δ = second − first)")
     categories = sorted(set(s_a.get("by_category", {})) | set(s_b.get("by_category", {})))
     for category in categories:
         cat_a = s_a.get("by_category", {}).get(category)
         cat_b = s_b.get("by_category", {}).get(category)
-        acc_a = cat_a.get("accuracy") if isinstance(cat_a, dict) else None
-        acc_b = cat_b.get("accuracy") if isinstance(cat_b, dict) else None
-        lines.append(row(category, _pct(acc_a), _pct(acc_b), _pp(acc_a, acc_b)))
+        cat_acc_a = cat_a.get("accuracy") if isinstance(cat_a, dict) else None
+        cat_acc_b = cat_b.get("accuracy") if isinstance(cat_b, dict) else None
+        lines.append(row(category, _pct(cat_acc_a), _pct(cat_acc_b), _pp(cat_acc_a, cat_acc_b)))
     lines.append("")
     lines.append("Speed (medians)")
-    lines.append(row("decode tps", _num(s_a.get("median_decode_tps")), _num(s_b.get("median_decode_tps")), _rel(s_a.get("median_decode_tps"), s_b.get("median_decode_tps"))))
-    lines.append(row("prefill tps", _num(s_a.get("median_prefill_tps")), _num(s_b.get("median_prefill_tps")), _rel(s_a.get("median_prefill_tps"), s_b.get("median_prefill_tps"))))
+    dec_a, dec_b = s_a.get("median_decode_tps"), s_b.get("median_decode_tps")
+    lines.append(row("decode tps", _num(dec_a), _num(dec_b), _rel(dec_a, dec_b)))
+    pre_a, pre_b = s_a.get("median_prefill_tps"), s_b.get("median_prefill_tps")
+    lines.append(row("prefill tps", _num(pre_a), _num(pre_b), _rel(pre_a, pre_b)))
     return "\n".join(lines)
 
 
@@ -121,7 +133,16 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
     def subset(summary: dict[str, Any]) -> dict[str, Any]:
         return {
             key: summary.get(key)
-            for key in ("accuracy", "correct", "total", "truncated", "errors", "answer_empty", "median_decode_tps", "median_prefill_tps")
+            for key in (
+                "accuracy",
+                "correct",
+                "total",
+                "truncated",
+                "errors",
+                "answer_empty",
+                "median_decode_tps",
+                "median_prefill_tps",
+            )
         }
 
     def delta(a: Any, b: Any) -> Any:
