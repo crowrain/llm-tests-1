@@ -9,6 +9,7 @@ timeout/retry budget, and whether a failed request aborts the run.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import statistics
@@ -16,7 +17,8 @@ import time
 import urllib.parse
 import urllib.request
 from fractions import Fraction
-from typing import Any, TextIO
+from pathlib import Path
+from typing import Any, Callable, TextIO
 
 
 API_BASE = "https://datasets-server.huggingface.co/rows"
@@ -333,6 +335,9 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     result["accuracy"] = result["correct"] / result["total"] if result["total"] else 0
     for category in sorted({r["category"] for r in records}):
         rows = [r for r in records if r["category"] == category]
+        # Records from runs older than this field may lack it (e.g. a --resume of an old
+        # results file); a missing median is not an error.
+        elapsed = [r["elapsed_seconds"] for r in rows if isinstance(r.get("elapsed_seconds"), (int, float))]
         result["by_category"][category] = {
             "total": len(rows),
             "correct": sum(r["correct"] for r in rows),
@@ -340,7 +345,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             "truncated": sum(1 for r in rows if r.get("truncated")),
             "median_prefill_tps": median_timing(rows, "prompt_per_second"),
             "median_decode_tps": median_timing(rows, "predicted_per_second"),
-            "median_elapsed_seconds": statistics.median(r["elapsed_seconds"] for r in rows),
+            "median_elapsed_seconds": statistics.median(elapsed) if elapsed else None,
         }
     # Separate "ran out of tokens before answering" from "answered wrongly": the first is a
     # budget setting, the second is the model. A request that failed after retries is neither,
@@ -369,16 +374,22 @@ def run_cases(
     timeout: int = 1800,
     retry_delay: float = 5.0,
     tolerate_errors: bool = True,
+    skip: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
-    case to ``output``. Returns all records.
+    case to ``output``. Returns the records of the cases actually sent.
 
     With ``tolerate_errors`` a request that fails after retries is recorded with ``error``
-    and the run continues; otherwise the first such failure aborts the run.
+    and the run continues; otherwise the first such failure aborts the run. Cases whose id
+    is in ``skip`` are not sent (used by ``--resume`` to continue an interrupted run).
     """
     records: list[dict[str, Any]] = []
     started = time.monotonic()
+    if skip:
+        print(f"{model} resuming: {len(skip)} of {len(cases)} cases already recorded, skipping them", flush=True)
     for index, case in enumerate(cases, 1):
+        if case["id"] in skip:
+            continue
         began = time.monotonic()
         content = ""
         reasoning_content: Any = None
@@ -434,3 +445,119 @@ def run_cases(
             flush=True,
         )
     return records
+
+
+# --- CLI ------------------------------------------------------------------------
+
+# Bumped if the fixture file layout changes; old runs keep their own files, so pinned
+# cases (and their needle labels) stay comparable.
+FIXTURES_VERSION = 1
+
+
+def write_fixtures(fixture_path: Path, fixtures: list[dict[str, Any]]) -> None:
+    """Write the pinned cases with a version header, so a stale or foreign cache is visible."""
+    fixture_path.write_text(
+        json.dumps({"version": FIXTURES_VERSION, "cases": fixtures}, ensure_ascii=False, indent=2) + "\n"
+    )
+
+
+def load_fixtures(fixture_path: Path) -> list[dict[str, Any]]:
+    """Read pinned cases; pre-versioning files were bare case arrays and still load."""
+    data = json.loads(fixture_path.read_text())
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("cases"), list):
+        return data["cases"]
+    raise ValueError(f"unrecognized fixtures.json format: {fixture_path}")
+
+
+def resume_records(results_path: Path) -> list[dict[str, Any]]:
+    """Load records from a previous (possibly interrupted) run, safe for appending.
+
+    A torn line left by a crash mid-write is dropped and the file truncated to the last
+    complete record, so appending starts on a line boundary; the torn case simply runs
+    again. Lines that parse but miss the fields the summary needs are treated the same
+    way, so their cases are re-run instead of crashing the summary.
+    """
+    if not results_path.exists():
+        return []
+    lines = results_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    records: list[dict[str, Any]] = []
+    kept: list[str] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and {"id", "category", "correct"} <= record.keys():
+            records.append(record)
+            kept.append(line)
+    if len(kept) != len(lines):
+        results_path.write_text("".join(kept), encoding="utf-8")
+    return records
+
+
+def main(
+    make_cases: Callable[[], list[dict[str, Any]]],
+    *,
+    timeout: int,
+    retry_delay: float,
+    tolerate_errors: bool,
+    description: str,
+) -> None:
+    """Shared entry point: build or reuse fixtures, run the cases, write results + summary."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--make-fixtures", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip cases already recorded in results-<model>.jsonl and append to that file",
+    )
+    args = parser.parse_args()
+    if args.resume and args.make_fixtures:
+        raise SystemExit("--resume cannot be combined with --make-fixtures")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    fixture_path = args.output_dir / "fixtures.json"
+    if args.make_fixtures or not fixture_path.exists():
+        write_fixtures(fixture_path, make_cases())
+    else:
+        fixtures = load_fixtures(fixture_path)
+
+    results_path = args.output_dir / f"results-{model_filename(args.model)}.jsonl"
+    records: list[dict[str, Any]] = []
+    if args.resume:
+        records = resume_records(results_path)
+        seen_ids = {record["id"] for record in records}
+        unknown = sorted(seen_ids - {case["id"] for case in fixtures})
+        if unknown:
+            raise SystemExit(
+                f"{results_path.name} contains {len(unknown)} case(s) not in the current fixtures "
+                f"(e.g. {', '.join(unknown[:3])}); the fixtures changed — run without --resume "
+                f"or delete the results file"
+            )
+        mode = "a"
+    else:
+        seen_ids = set()
+        mode = "w"
+    started = time.monotonic()
+    with results_path.open(mode, encoding="utf-8") as output:
+        records = records + run_cases(
+            args.base_url,
+            args.model,
+            fixtures,
+            output,
+            timeout=timeout,
+            retry_delay=retry_delay,
+            tolerate_errors=tolerate_errors,
+            skip=frozenset(seen_ids),
+        )
+    # The summary covers every record, resumed ones included.
+    summary = summarize(records)
+    summary.update({"model": args.model, "elapsed_seconds": time.monotonic() - started})
+    (args.output_dir / f"summary-{model_filename(args.model)}.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
+    )
+    print(json.dumps(summary, ensure_ascii=False), flush=True)

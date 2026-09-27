@@ -9,10 +9,6 @@ aborts the run on a failed request instead of recording it.
 
 from __future__ import annotations
 
-import argparse
-import json
-import time
-from pathlib import Path
 from typing import Any
 
 import quality_common as qc
@@ -52,42 +48,13 @@ def make_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080")
-    parser.add_argument("--make-fixtures", action="store_true")
-    args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    fixture_path = args.output_dir / "fixtures.json"
-    if args.make_fixtures or not fixture_path.exists():
-        fixtures = make_cases()
-        fixture_path.write_text(json.dumps(fixtures, ensure_ascii=False, indent=2) + "\n")
-    else:
-        fixtures = json.loads(fixture_path.read_text())
-
-    results_path = args.output_dir / f"results-{qc.model_filename(args.model)}.jsonl"
-    started = time.monotonic()
-    with results_path.open("w", encoding="utf-8") as output:
-        # Quick profile: short timeout/retry budget, and a failed request aborts the run
-        # rather than being recorded — for 72 cheap cases a dead endpoint is best found now.
-        records = qc.run_cases(
-            args.base_url,
-            args.model,
-            fixtures,
-            output,
-            timeout=900,
-            retry_delay=4.0,
-            tolerate_errors=False,
-        )
-    summary = qc.summarize(records)
-    summary.update({"model": args.model, "elapsed_seconds": time.monotonic() - started})
-    (args.output_dir / f"summary-{qc.model_filename(args.model)}.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
-    )
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
-
-
 if __name__ == "__main__":
-    main()
+    # Quick profile: short timeout/retry budget, and a failed request aborts the run
+    # rather than being recorded — for 72 cheap cases a dead endpoint is best found now.
+    qc.main(
+        make_cases,
+        timeout=900,
+        retry_delay=4.0,
+        tolerate_errors=False,
+        description="Express profile: 72 fast cases; a failed request aborts the run.",
+    )

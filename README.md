@@ -55,10 +55,17 @@ python3 test_quality_express_1.py \
 python3 test_quality_express_1.py \
   --model my-model-b \
   --output-dir runs/2026-09-27
+
+# a crashed or interrupted run continues where it stopped
+python3 test_quality_express_1.py --model my-model-a --output-dir runs/2026-09-27 --resume
 ```
 
-`--make-fixtures` forces a rebuild. `--base-url` defaults to
-`http://127.0.0.1:8080`. `test_quality_expanded_1.py` takes the same four flags.
+`--make-fixtures` forces a rebuild. `--resume` skips cases already recorded in
+`results-<model>.jsonl` (a torn final line left by a crash is dropped) and rebuilds
+the summary over all records; it refuses to run if the recorded cases no longer
+match the current fixtures, and cannot be combined with `--make-fixtures`.
+`--base-url` defaults to `http://127.0.0.1:8080`. `test_quality_expanded_1.py`
+takes the same flags.
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 `reasoning_effort="medium"`; per-case `max_completion_tokens` come from the fixture.
@@ -67,13 +74,31 @@ Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 
 ```
 runs/2026-09-27/
-  fixtures.json              the pinned cases, reused by later models
+  fixtures.json              the pinned cases (version header + cases), reused by later models
   results-<model>.jsonl      one record per case, full content kept
   summary-<model>.json       accuracy by category, throughput, truncation counts
 ```
 
 Model ids that contain path separators or spaces are flattened to `_` in the output
-file names (`org/model` → `results-org_model.jsonl`).
+file names (`org/model` → `results-org_model.jsonl`). Fixtures written today carry a
+small `version` header; pre-versioning bare-array `fixtures.json` files are still read.
+
+## Comparison
+
+`compare_quality.py` answers the question the harnesses exist for — which
+deployment answered better, and how fast:
+
+```bash
+# both models ran into one directory (compared in file-name order)
+python3 compare_quality.py runs/2026-09-27
+
+# or two summary files / directories, with an optional JSON report
+python3 compare_quality.py runs/a/summary-model-a.json runs/b/summary-model-b.json \
+  --output comparison.json
+```
+
+It prints overall and per-category accuracy with the delta (second model minus
+first), truncation and error counts, and median prefill/decode throughput.
 
 ## Scoring
 
@@ -139,8 +164,9 @@ their own labels, so old runs stay comparable.
 
 ## Tests
 
-The scoring, extraction, summary and run-loop helpers are covered by stdlib-only
-regression tests (no endpoint and no network needed — the request layer is mocked):
+The scoring, extraction, summary, run-loop and CLI (fixtures, resume) helpers are
+covered by stdlib-only regression tests (no endpoint and no network needed — the
+request layer is mocked):
 
 ```bash
 python3 -m unittest discover -v

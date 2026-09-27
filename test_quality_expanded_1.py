@@ -10,12 +10,8 @@ model *and* serving profile.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 import re
-import time
-from pathlib import Path
 from typing import Any
 
 import quality_common as qc
@@ -91,34 +87,13 @@ def make_cases() -> list[dict[str, Any]]:
     return cases
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080")
-    parser.add_argument("--make-fixtures", action="store_true")
-    args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    fixture_path = args.output_dir / "fixtures.json"
-    if args.make_fixtures or not fixture_path.exists():
-        fixtures = make_cases()
-        fixture_path.write_text(json.dumps(fixtures, ensure_ascii=False, indent=2) + "\n")
-    else:
-        fixtures = json.loads(fixture_path.read_text())
-
-    results_path = args.output_dir / f"results-{qc.model_filename(args.model)}.jsonl"
-    started = time.monotonic()
-    with results_path.open("w", encoding="utf-8") as output:
-        # Long profile: generous timeout/retry budget for 180k-context cases, and a failed
-        # request is recorded instead of aborting the run.
-        records = qc.run_cases(args.base_url, args.model, fixtures, output)
-    summary = qc.summarize(records)
-    summary.update({"model": args.model, "elapsed_seconds": time.monotonic() - started})
-    (args.output_dir / f"summary-{qc.model_filename(args.model)}.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
-    )
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
-
-
 if __name__ == "__main__":
-    main()
+    # Long profile: generous timeout/retry budget for 180k-context cases, and a failed
+    # request is recorded instead of aborting the run.
+    qc.main(
+        make_cases,
+        timeout=1800,
+        retry_delay=5.0,
+        tolerate_errors=True,
+        description="Expanded profile: 266 cases including MMLU and long-context needles; a failed request is recorded.",
+    )

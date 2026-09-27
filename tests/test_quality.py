@@ -5,9 +5,13 @@ Run from the repository root with:  python3 -m unittest discover -v
 
 import io
 import json
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
+import compare_quality as cq
 import quality_common as qc
 
 
@@ -171,6 +175,178 @@ class RunCasesTests(unittest.TestCase):
         with mock.patch.object(qc, "request", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 qc.run_cases("http://x", "model", self.CASES, io.StringIO(), tolerate_errors=False)
+
+
+class FixturesTests(unittest.TestCase):
+    def fixtures(self):
+        return [{"id": "gsm8k_00", "category": "gsm8k", "prompt": "q", "expected": "42", "max_tokens": 16}]
+
+    def test_roundtrip_with_version_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            qc.write_fixtures(path, self.fixtures())
+            data = json.loads(path.read_text())
+            self.assertEqual(data["version"], qc.FIXTURES_VERSION)
+            self.assertEqual(qc.load_fixtures(path), self.fixtures())
+
+    def test_pre_versioning_bare_array_still_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            path.write_text(json.dumps(self.fixtures()) + "\n")
+            self.assertEqual(qc.load_fixtures(path), self.fixtures())
+
+    def test_unrecognized_format_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            path.write_text('{"version": 99}')
+            with self.assertRaises(ValueError):
+                qc.load_fixtures(path)
+
+
+class ResumeTests(unittest.TestCase):
+    def test_torn_final_line_is_dropped_and_file_truncated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "results-model.jsonl"
+            path.write_text('{"id": "a", "category": "gsm8k", "correct": true}\n{"id": "b", "correct": fa')
+            records = qc.resume_records(path)
+            self.assertEqual([r["id"] for r in records], ["a"])
+            self.assertEqual(path.read_text(), '{"id": "a", "category": "gsm8k", "correct": true}\n')
+
+    def test_missing_file_yields_no_records(self):
+        self.assertEqual(qc.resume_records(Path("/nonexistent/results-model.jsonl")), [])
+
+    def test_run_cases_skips_recorded_ids(self):
+        cases = [
+            {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+            {"id": "c2", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+        ]
+        with mock.patch.object(qc, "request", return_value=RunCasesTests.RESPONSE) as fake:
+            records = qc.run_cases("http://x", "m", cases, io.StringIO(), skip=frozenset({"c1"}))
+        self.assertEqual([r["id"] for r in records], ["c2"])
+        self.assertEqual(fake.call_count, 1)
+
+    def test_summarize_tolerates_records_without_elapsed_seconds(self):
+        # --resume of a results file written before elapsed_seconds existed.
+        record = {"id": "a", "category": "gsm8k", "correct": True, "truncated": False, "answer_empty": False, "timings": {}}
+        summary = qc.summarize([record])
+        self.assertEqual(summary["by_category"]["gsm8k"]["median_elapsed_seconds"], None)
+
+
+class CompareTests(unittest.TestCase):
+    def make_summary(self, model: str, accuracy: float, decode_tps: float) -> dict:
+        return {
+            "model": model,
+            "total": 10,
+            "correct": int(round(accuracy * 10)),
+            "accuracy": accuracy,
+            "truncated": 1,
+            "errors": 0,
+            "median_prefill_tps": None,
+            "median_decode_tps": decode_tps,
+            "by_category": {
+                "gsm8k": {
+                    "total": 10,
+                    "correct": int(round(accuracy * 10)),
+                    "accuracy": accuracy,
+                    "truncated": 1,
+                    "median_prefill_tps": None,
+                    "median_decode_tps": decode_tps,
+                    "median_elapsed_seconds": 1.0,
+                }
+            },
+        }
+
+    def test_render_reports_models_and_deltas(self):
+        text = cq.render("model-a", self.make_summary("model-a", 0.8, 50.0), "model-b", self.make_summary("model-b", 0.7, 40.0))
+        self.assertIn("model-a vs model-b", text)
+        self.assertIn("-10.0 pp", text)  # gsm8k: 70% − 80%
+        self.assertIn("-20.0%", text)  # decode: (40 − 50) / 50
+
+    def test_resolve_single_directory_with_two_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "summary-model-a.json").write_text(json.dumps(self.make_summary("model-a", 0.8, 50.0)))
+            (tmp_path / "summary-model-b.json").write_text(json.dumps(self.make_summary("model-b", 0.7, 40.0)))
+            (a, b) = cq.resolve([tmp_path])
+            self.assertEqual(a[0], "model-a")
+            self.assertEqual(b[0], "model-b")
+
+    def test_resolve_two_summary_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            file_a = tmp_path / "summary-model-a.json"
+            file_b = tmp_path / "summary-model-b.json"
+            file_a.write_text(json.dumps(self.make_summary("model-a", 0.8, 50.0)))
+            file_b.write_text(json.dumps(self.make_summary("model-b", 0.7, 40.0)))
+            (a, b) = cq.resolve([file_a, file_b])
+            self.assertEqual((a[0], b[0]), ("model-a", "model-b"))
+
+    def test_single_directory_with_one_summary_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "summary-model-a.json").write_text(json.dumps(self.make_summary("model-a", 0.8, 50.0)))
+            with self.assertRaises(SystemExit):
+                cq.resolve([Path(tmp)])
+
+    def test_as_json_deltas(self):
+        data = cq.as_json("model-a", self.make_summary("model-a", 0.8, 50.0), "model-b", self.make_summary("model-b", 0.7, 40.0))
+        self.assertAlmostEqual(data["delta_accuracy"], -0.1)
+        self.assertAlmostEqual(data["by_category"]["gsm8k"]["delta"], -0.1)
+        self.assertEqual(data["a"]["model"], "model-a")
+
+
+class SharedMainTests(unittest.TestCase):
+    """The shared CLI (fixtures, resume, results + summary), fully offline."""
+
+    def fixtures(self):
+        return [
+            {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+            {"id": "c2", "category": "arc_challenge", "expected": "B", "max_tokens": 32},
+        ]
+
+    def test_resume_continues_and_summary_covers_all_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            # First "run": c1 completed, then a crash left a torn line for c2.
+            qc.write_fixtures(out_dir / "fixtures.json", self.fixtures())
+            (out_dir / "results-m.jsonl").write_text(
+                '{"id": "c1", "category": "arc_challenge", "correct": true, "truncated": false, "answer_empty": false, "timings": {}, "elapsed_seconds": 1.0}\n'
+                '{"id": "c2", "correct": fa'
+            )
+
+            def fake_request(base_url, model, case, **kwargs):
+                if case["id"] == "c1":
+                    raise AssertionError("c1 must be skipped on resume")
+                return {
+                    "choices": [{"message": {"content": "Answer: B.", "reasoning_content": None}, "finish_reason": "stop"}],
+                    "usage": None,
+                    "timings": {},
+                }
+
+            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume"]), mock.patch.object(
+                qc, "request", side_effect=fake_request
+            ):
+                qc.main(lambda: self.fixtures(), timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+
+            lines = [json.loads(line) for line in (out_dir / "results-m.jsonl").read_text().splitlines() if line.strip()]
+            self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
+            summary = json.loads((out_dir / "summary-m.json").read_text())
+            self.assertEqual(summary["total"], 2)
+            self.assertEqual(summary["correct"], 2)
+
+    def test_resume_rejects_make_fixtures(self):
+        with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", "/tmp/none", "--resume", "--make-fixtures"]):
+            with self.assertRaises(SystemExit):
+                qc.main(lambda: [], timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+
+    def test_resume_rejects_changed_fixtures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            cases = self.fixtures()[:1]
+            (out_dir / "fixtures.json").write_text(json.dumps({"version": qc.FIXTURES_VERSION, "cases": cases}))
+            (out_dir / "results-m.jsonl").write_text('{"id": "old1", "category": "gsm8k", "correct": true}\n')
+            with mock.patch.object(sys, "argv", ["prog", "--model", "m", "--output-dir", str(out_dir), "--resume"]):
+                with self.assertRaises(SystemExit):
+                    qc.main(lambda: cases, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
 
 if __name__ == "__main__":
