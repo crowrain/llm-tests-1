@@ -11,7 +11,7 @@ compare the same work.
 
 ## The two harnesses
 
-| | `ninfer_quality_express.py` | `ninfer_quality_expanded.py` |
+| | `test_quality_express_1.py` | `test_quality_expanded_1.py` |
 |---|---|---|
 | Cases | 72 | 266 |
 | GSM8K | 30 | 100 |
@@ -40,19 +40,19 @@ records an error instead of aborting the run.
 
 ```bash
 # first model: builds fixtures.json in the output directory
-python3 ninfer_quality_express.py \
+python3 test_quality_express_1.py \
   --model my-model-a \
   --output-dir runs/2026-09-27 \
   --base-url http://127.0.0.1:8080
 
 # second model: reuses the same fixtures, so the comparison is like-for-like
-python3 ninfer_quality_express.py \
+python3 test_quality_express_1.py \
   --model my-model-b \
   --output-dir runs/2026-09-27
 ```
 
 `--make-fixtures` forces a rebuild. `--base-url` defaults to
-`http://127.0.0.1:8080`. `ninfer_quality_expanded.py` takes the same four flags.
+`http://127.0.0.1:8080`. `test_quality_expanded_1.py` takes the same four flags.
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 `reasoning_effort="medium"`; per-case `max_completion_tokens` come from the fixture.
@@ -98,7 +98,7 @@ That is a budget setting, not a quality result, so it is reported separately:
 - per record — `finish_reason`, `truncated`, `answer_empty`
 - per summary — `truncated`, `answer_empty`, `wrong_and_truncated`,
   `wrong_and_complete`
-- per category — `truncated`, in `ninfer_quality_expanded.py` only
+- per category — `truncated`, in `test_quality_expanded_1.py` only
 
 If `wrong_and_truncated` is high, raise `max_tokens` before drawing conclusions
 about the model.
