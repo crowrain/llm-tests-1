@@ -21,25 +21,24 @@ compare the same work.
 | MMLU | — | 50 (5 subjects × 10) |
 | JSON instruction following | 12 | 12 |
 | Needle-in-a-haystack | — | 4 (16k / 64k / 128k / 180k) |
-| Prefill / decode throughput | yes | yes |
-| Per-category timings | yes | yes |
-| Timeout / retry budget | 900 s / 4 s × 3 | 1800 s / 5 s × 3 |
+| Timeout per request | 900 s | 1800 s |
+| Retry delay / attempts | 4 s / 3 | 5 s / 3 |
 | Survives a failed request | no | yes |
 
 Use **express** for a quick read between two candidates, **expanded** when the
 answer matters: it adds knowledge (MMLU) and long context, and it records an
 error instead of aborting the run.
 
-Both entry points are thin: dataset fetching, answer extraction, scoring, the
-HTTP layer and summary reporting live in `quality_common.py`, so the two
-harnesses cannot drift apart. They differ only in case selection, request
-budget and failure tolerance.
+Both entry points are thin: dataset fetching, answer extraction, scoring, the HTTP
+layer, the run loop and summary reporting live in `quality_common.py`, so the two
+harnesses cannot drift apart. They differ only in case selection, request budget
+and failure tolerance.
 
 ## Requirements
 
-- Python 3.9+, standard library only — no dependencies to install. Tested on 3.12
-  and 3.14.
-- Network access to `datasets-server.huggingface.co`, to build fixtures the first
+- Python 3.9+, standard library only — no dependencies to install. CI runs the
+  test suite on the supported range's ends: 3.9 and 3.14.
+- Network access to `datasets-server.huggingface.co` to build fixtures the first
   time. After that `fixtures.json` is reused and the run is offline apart from the
   endpoint itself.
 - An endpoint serving `/v1/chat/completions`.
@@ -70,34 +69,37 @@ python3 test_quality_express_1.py --model my-model-a,my-model-b \
   --base-url http://127.0.0.1:8080,http://127.0.0.1:8081 --output-dir runs/2026-09-27
 ```
 
-`--make-fixtures` forces a rebuild. `--resume` skips cases already recorded in
-`results-<model>.jsonl` (a torn final line left by a crash is dropped) and rebuilds
-the summary over all records; it refuses to run if the recorded cases no longer
-match the current fixtures, and cannot be combined with `--make-fixtures`.
-`--categories` restricts the run to fixture categories — exact names or prefixes,
-comma-separated (`long_context` selects all four needle archives); a token that
-matches nothing is an error, so a typo cannot silently run an empty subset.
-`--limit N` caps the run to the first N selected cases (fixture order). Both
-combine with `--resume`: already-recorded cases stay skipped.
-`--concurrency N` sends N cases in parallel (single model only) — useful for
-long runs; per-case wall-clock then overlaps, so elapsed medians become load
-numbers rather than latencies. The endpoint should handle concurrent
-connections (standard for inference servers); each worker thread keeps its
-own keep-alive connection.
-Listing several comma-separated models (with matching `--base-url` entries, or
-one shared URL) interleaves them strictly: each case goes to every model in
-turn, one request in flight at a time, so machine drift (heat, cache) cannot
-favour one side and no run distorts the other's throughput. Each model gets its
-own results/summary files.
-`--base-url` defaults to `http://127.0.0.1:8080`. `test_quality_expanded_1.py`
-takes the same flags.
+`test_quality_expanded_1.py` takes the same flags. Flag reference:
+
+| Flag | Meaning |
+|---|---|
+| `--model` | model id (required). Comma-separated ids switch the run to a strict A/B interleave. |
+| `--base-url` | endpoint, default `http://127.0.0.1:8080`. Comma-separated entries must match the `--model` count, or a single URL is shared by all models. |
+| `--output-dir` | directory for `fixtures.json`, `results-<model>.jsonl`, `summary-<model>.json` (created if missing). |
+| `--make-fixtures` | force a rebuild of `fixtures.json`. Cannot be combined with `--resume`. |
+| `--resume` | skip cases already recorded in `results-<model>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
+| `--categories` | run a subset by category — exact names or prefixes, comma-separated (`long_context` selects all four needle archives). A token matching nothing is an error, so a typo cannot silently run an empty subset. |
+| `--limit N` | cap the run to the first N selected cases (fixture order). Combines with `--resume`: already-recorded cases stay skipped. |
+| `--concurrency N` | send N cases in parallel (single model only, default 1). Per-case wall-clock then overlaps, so elapsed medians become load numbers rather than latencies — the run prints a note. Each worker thread keeps its own keep-alive connection; the endpoint should handle concurrent connections (standard for inference servers). |
+| `--no-reasoning-effort` | omit `reasoning_effort` from the payload (servers that reject unknown keys). |
+| `--no-seed` | omit `seed` from the payload (same). |
+
+### A/B interleave
+
+Listing several models interleaves them strictly: case 1 → model a, case 1 →
+model b, case 2 → model a, … — one request in flight at a time. Each model's
+answers span the same time window, so machine drift (heat, cache) cannot
+systematically favour one side, and no run distorts the other's throughput. Each
+model gets its own results/summary files; `--resume` works per model.
+`--concurrency` is rejected with multiple models by design.
+
+### Request payload
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
-`reasoning_effort="medium"`; per-case `max_completion_tokens` come from the fixture.
-Servers that reject unknown payload fields (some llama.cpp / vLLM builds) can be
-served with `--no-reasoning-effort` and/or `--no-seed`. Requests reuse a
-keep-alive TCP connection per endpoint (one per worker thread), so a run pays
-the handshake once, not once per case.
+`reasoning_effort="medium"` (the last two unless disabled above); per-case
+`max_completion_tokens` come from the fixture. Requests reuse a keep-alive TCP
+connection per endpoint, so a run pays the handshake once, not once per case; a
+dead or closed connection is dropped and reconnected on retry.
 
 ### Output
 
@@ -108,9 +110,9 @@ runs/2026-09-27/
   summary-<model>.json       accuracy by category, throughput, truncation counts
 ```
 
-Model ids that contain path separators or spaces are flattened to `_` in the output
-file names (`org/model` → `results-org_model.jsonl`). Fixtures written today carry a
-small `version` header; pre-versioning bare-array `fixtures.json` files are still read.
+Model ids that contain path separators or spaces are flattened to `_` in the
+output file names (`org/model` → `results-org_model.jsonl`). Fixtures carry a small
+`version` header; pre-versioning bare-array `fixtures.json` files are still read.
 
 ## Comparison
 
@@ -193,16 +195,22 @@ their own labels, so old runs stay comparable.
 
 ## Tests
 
-The scoring, extraction, summary, run-loop and CLI (fixtures, resume) helpers are
-covered by stdlib-only regression tests (no endpoint and no network needed — the
-request layer is mocked):
+The scoring, extraction, summary, run-loop, HTTP-layer and CLI (fixtures, resume,
+subset selection, payload flags, concurrency, interleave) helpers are covered by
+65 stdlib-only regression tests (no endpoint and no network needed — the request
+layer is mocked):
 
 ```bash
 python3 -m unittest discover -v
 ```
 
 They also run automatically on every push to `main` and on pull requests via
-GitHub Actions (Python 3.9 and 3.14).
+GitHub Actions (Python 3.9 and 3.14, `fail-fast: false`).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history of changes, each entry
+linked to its commit.
 
 ## License
 
