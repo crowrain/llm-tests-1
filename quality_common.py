@@ -10,12 +10,16 @@ timeout/retry budget, and whether a failed request aborts the run.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import http.client
 import json
 import re
 import statistics
+import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable, TextIO
@@ -267,6 +271,53 @@ def score(case: dict[str, Any], content: str) -> tuple[bool, str | None]:
 
 # --- HTTP layer ----------------------------------------------------------------
 
+# Keep-alive connections are reused across requests so a 266-case run pays the TCP
+# handshake once per endpoint instead of 266 times. They live in thread-local storage:
+# http.client is not thread-safe, so --concurrency workers each own their own pool.
+_LOCAL = threading.local()
+
+
+def _connections() -> dict[tuple, "http.client.HTTPConnection"]:
+    if not hasattr(_LOCAL, "conns"):
+        _LOCAL.conns = {}
+    return _LOCAL.conns
+
+
+def _post_json(url: str, data: bytes, *, timeout: float) -> bytes:
+    """POST ``data`` to ``url`` and return the response body, reusing the keep-alive
+    connection for (scheme, host, port). A failed exchange drops the connection so the
+    caller's next attempt reconnects. HTTP errors (status >= 400) are raised, not
+    returned: the body is not a completion."""
+    parts = urllib.parse.urlsplit(url)
+    key = (parts.scheme, parts.hostname, parts.port)
+    path = parts.path or "/"
+    if parts.query:
+        path = f"{path}?{parts.query}"
+    conn = _connections().get(key)
+    if conn is None:
+        if parts.scheme == "https":
+            conn = http.client.HTTPSConnection(parts.hostname, parts.port, timeout=timeout)
+        else:
+            conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+        _connections()[key] = conn
+    # The socket timeout is fixed at connect time, so apply the per-request bound to the
+    # live socket (reuse) or to the connection's default (first connect).
+    if conn.sock is None:
+        conn.timeout = timeout
+    else:
+        conn.sock.settimeout(timeout)
+    try:
+        conn.request("POST", path, body=data, headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        body = response.read()
+    except Exception:
+        _connections().pop(key, None)
+        raise
+    if response.status >= 400:
+        _connections().pop(key, None)
+        raise RuntimeError(f"HTTP {response.status} from {url}: {body[:500]!r}")
+    return body
+
 
 def request(
     base_url: str,
@@ -300,16 +351,10 @@ def request(
     if send_reasoning_effort:
         payload["reasoning_effort"] = "medium"
     data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{base_url.rstrip('/')}/v1/chat/completions",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
     error: Exception | None = None
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                return json.load(response)
+            return json.loads(_post_json(f"{base_url.rstrip('/')}/v1/chat/completions", data, timeout=timeout))
         except Exception as exc:
             error = exc
             if attempt == 2:
@@ -371,6 +416,87 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
 # --- Run loop ---------------------------------------------------------------------
 
 
+def _process_case(
+    base_url: str,
+    model: str,
+    case: dict[str, Any],
+    *,
+    timeout: int,
+    retry_delay: float,
+    tolerate_errors: bool,
+    send_seed: bool,
+    send_reasoning_effort: bool,
+) -> dict[str, Any]:
+    """Request one case and score the answer. Pure worker: no file I/O, safe to run in
+    threads. Returns the record for the case."""
+    began = time.monotonic()
+    content = ""
+    reasoning_content: Any = None
+    finish_reason: Any = None
+    usage: Any = None
+    timings: dict[str, Any] = {}
+    correct = False
+    parsed: Any = None
+    error: str | None = None
+    try:
+        response = request(
+            base_url,
+            model,
+            case,
+            timeout=timeout,
+            retry_delay=retry_delay,
+            send_seed=send_seed,
+            send_reasoning_effort=send_reasoning_effort,
+        )
+    except Exception as exc:
+        if not tolerate_errors:
+            raise
+        error = repr(exc)
+        response = {}
+    choice = response.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content") or ""
+    reasoning_content = message.get("reasoning_content")
+    finish_reason = choice.get("finish_reason")
+    usage = response.get("usage")
+    timings = response.get("timings", {})
+    if error is None:
+        # A request failure must not be scored: there is no answer to misread.
+        correct, parsed = score(case, content)
+    # A reasoning model can burn the whole budget before it states an answer; that is a
+    # different failure from answering wrongly, so record it apart.
+    return {
+        "id": case["id"],
+        "category": case["category"],
+        "subject": case.get("subject"),
+        "expected": case["expected"],
+        "parsed": parsed,
+        "correct": correct,
+        "content": content,
+        "reasoning_content": reasoning_content,
+        "finish_reason": finish_reason,
+        "truncated": finish_reason == "length",
+        "answer_empty": not strip_reasoning(content).strip(),
+        "usage": usage,
+        "timings": timings,
+        "elapsed_seconds": time.monotonic() - began,
+        "error": error,
+        "approx_chars": case.get("approx_chars"),
+    }
+
+
+def _emit(output: TextIO, model: str, done: int, total: int, case: dict[str, Any], record: dict[str, Any], started: float) -> None:
+    """Stream one record and a progress line. Crash-safe: each record lands on its own
+    flushed line, which is what makes --resume possible."""
+    output.write(json.dumps(record, ensure_ascii=False) + "\n")
+    output.flush()
+    print(
+        f"{model} {done}/{total} {case['category']} "
+        f"{'OK' if record['correct'] else 'FAIL'} elapsed={time.monotonic() - started:.0f}s",
+        flush=True,
+    )
+
+
 def run_cases(
     base_url: str,
     model: str,
@@ -383,6 +509,7 @@ def run_cases(
     skip: frozenset[str] = frozenset(),
     send_seed: bool = True,
     send_reasoning_effort: bool = True,
+    concurrency: int = 1,
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
     case to ``output``. Returns the records of the cases actually sent.
@@ -390,77 +517,85 @@ def run_cases(
     With ``tolerate_errors`` a request that fails after retries is recorded with ``error``
     and the run continues; otherwise the first such failure aborts the run. Cases whose id
     is in ``skip`` are not sent (used by ``--resume`` to continue an interrupted run).
+    With ``concurrency`` greater than one, cases are sent by parallel worker threads and
+    records stream in completion order; per-case wall-clock (elapsed_seconds) then
+    overlaps, so the run measures throughput under load, not per-case latency.
     """
-    records: list[dict[str, Any]] = []
-    started = time.monotonic()
+    pending = [case for case in cases if case["id"] not in skip]
     if skip:
         print(f"{model} resuming: {len(skip)} of {len(cases)} cases already recorded, skipping them", flush=True)
-    for index, case in enumerate(cases, 1):
-        if case["id"] in skip:
-            continue
-        began = time.monotonic()
-        content = ""
-        reasoning_content: Any = None
-        finish_reason: Any = None
-        usage: Any = None
-        timings: dict[str, Any] = {}
-        correct = False
-        parsed: Any = None
-        error: str | None = None
+    if concurrency > 1:
+        print(f"{model} concurrency={concurrency}: requests overlap, per-case elapsed_seconds is a load number, not a latency", flush=True)
+    records: list[dict[str, Any]] = []
+    started = time.monotonic()
+    worker_kwargs = dict(
+        timeout=timeout,
+        retry_delay=retry_delay,
+        tolerate_errors=tolerate_errors,
+        send_seed=send_seed,
+        send_reasoning_effort=send_reasoning_effort,
+    )
+    if concurrency <= 1:
+        for case in pending:
+            record = _process_case(base_url, model, case, **worker_kwargs)
+            _emit(output, model, len(records) + 1, len(pending), case, record, started)
+            records.append(record)
+    else:
+        pool = ThreadPoolExecutor(max_workers=concurrency)
+        futures = {pool.submit(_process_case, base_url, model, case, **worker_kwargs): case for case in pending}
         try:
-            response = request(
+            for future in as_completed(futures):
+                case = futures[future]
+                record = future.result()  # propagates worker exceptions (abort mode)
+                _emit(output, model, len(records) + 1, len(pending), case, record, started)
+                records.append(record)
+        finally:
+            # Do not wait for in-flight requests on the way out (abort mode would hang).
+            pool.shutdown(wait=False, cancel_futures=True)
+    return records
+
+
+def run_cases_interleaved(
+    base_urls: list[str],
+    models: list[str],
+    cases: list[dict[str, Any]],
+    outputs: dict[str, TextIO],
+    *,
+    timeout: int,
+    retry_delay: float,
+    tolerate_errors: bool,
+    skip_by_model: dict[str, frozenset[str]],
+    send_seed: bool = True,
+    send_reasoning_effort: bool = True,
+) -> dict[str, list[dict[str, Any]]]:
+    """Strict A/B interleave: for every case, ask each model in turn, one request in
+    flight at a time. Each model's answers thus span the same time window, so machine
+    drift (heat, cache) cannot systematically favour one side, and no run distorts the
+    other's throughput. Records stream to each model's own output in request order.
+    """
+    records_by_model: dict[str, list[dict[str, Any]]] = {model: [] for model in models}
+    pending_by_model = {model: [case for case in cases if case["id"] not in skip_by_model[model]] for model in models}
+    for model in models:
+        if skip_by_model[model]:
+            print(f"{model} resuming: {len(skip_by_model[model])} of {len(cases)} cases already recorded, skipping them", flush=True)
+    started = time.monotonic()
+    for case in cases:
+        for model, base_url in zip(models, base_urls):
+            if case["id"] in skip_by_model[model]:
+                continue
+            record = _process_case(
                 base_url,
                 model,
                 case,
                 timeout=timeout,
                 retry_delay=retry_delay,
+                tolerate_errors=tolerate_errors,
                 send_seed=send_seed,
                 send_reasoning_effort=send_reasoning_effort,
             )
-        except Exception as exc:
-            if not tolerate_errors:
-                raise
-            error = repr(exc)
-            response = {}
-        choice = response.get("choices", [{}])[0]
-        message = choice.get("message", {})
-        content = message.get("content") or ""
-        reasoning_content = message.get("reasoning_content")
-        finish_reason = choice.get("finish_reason")
-        usage = response.get("usage")
-        timings = response.get("timings", {})
-        if error is None:
-            # A request failure must not be scored: there is no answer to misread.
-            correct, parsed = score(case, content)
-        # A reasoning model can burn the whole budget before it states an answer; that is a
-        # different failure from answering wrongly, so record it apart.
-        record = {
-            "id": case["id"],
-            "category": case["category"],
-            "subject": case.get("subject"),
-            "expected": case["expected"],
-            "parsed": parsed,
-            "correct": correct,
-            "content": content,
-            "reasoning_content": reasoning_content,
-            "finish_reason": finish_reason,
-            "truncated": finish_reason == "length",
-            "answer_empty": not strip_reasoning(content).strip(),
-            "usage": usage,
-            "timings": timings,
-            "elapsed_seconds": time.monotonic() - began,
-            "error": error,
-            "approx_chars": case.get("approx_chars"),
-        }
-        output.write(json.dumps(record, ensure_ascii=False) + "\n")
-        output.flush()
-        records.append(record)
-        print(
-            f"{model} {index}/{len(cases)} {case['category']} "
-            f"{'OK' if correct else 'FAIL'} elapsed={time.monotonic() - started:.0f}s",
-            flush=True,
-        )
-    return records
+            _emit(outputs[model], model, len(records_by_model[model]) + 1, len(pending_by_model[model]), case, record, started)
+            records_by_model[model].append(record)
+    return records_by_model
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -551,11 +686,15 @@ def main(
     tolerate_errors: bool,
     description: str,
 ) -> None:
-    """Shared entry point: build or reuse fixtures, run the cases, write results + summary."""
+    """Shared entry point: build or reuse fixtures, run the cases, write results + summary.
+
+    ``--model`` may list several comma-separated model ids (with matching ``--base-url``
+    entries) for a strict A/B interleave; a single model is the classic run.
+    """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model", required=True, help="model id, or comma-separated ids for an A/B interleave")
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8080", help="endpoint, or comma-separated endpoints matching --model")
     parser.add_argument("--make-fixtures", action="store_true")
     parser.add_argument(
         "--resume",
@@ -577,9 +716,27 @@ def main(
         action="store_true",
         help="do not send seed (for servers that reject unknown payload fields)",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="parallel requests for a single-model run (overlaps per-case latency)",
+    )
     args = parser.parse_args()
     if args.resume and args.make_fixtures:
         raise SystemExit("--resume cannot be combined with --make-fixtures")
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be at least 1")
+    models = [model.strip() for model in args.model.split(",") if model.strip()]
+    if not models:
+        raise SystemExit("--model is empty")
+    base_urls = [url.strip() for url in args.base_url.split(",") if url.strip()]
+    if len(base_urls) == 1 and len(models) > 1:
+        base_urls = base_urls * len(models)
+    if len(base_urls) != len(models):
+        raise SystemExit("comma-separated --base-url entries must match the --model count (or be a single shared URL)")
+    if len(models) > 1 and args.concurrency > 1:
+        raise SystemExit("--concurrency is not supported with multiple models: the interleave is sequential by design")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     fixture_path = args.output_dir / "fixtures.json"
     if args.make_fixtures or not fixture_path.exists():
@@ -587,25 +744,6 @@ def main(
         write_fixtures(fixture_path, all_fixtures)
     else:
         all_fixtures = load_fixtures(fixture_path)
-
-    results_path = args.output_dir / f"results-{model_filename(args.model)}.jsonl"
-    records: list[dict[str, Any]] = []
-    if args.resume:
-        records = resume_records(results_path)
-        seen_ids = {record["id"] for record in records}
-        # Guard against the FULL fixture set: a --categories subset is a narrower view of
-        # the same fixtures, not a fixture change.
-        unknown = sorted(seen_ids - {case["id"] for case in all_fixtures})
-        if unknown:
-            raise SystemExit(
-                f"{results_path.name} contains {len(unknown)} case(s) not in the current fixtures "
-                f"(e.g. {', '.join(unknown[:3])}); the fixtures changed — run without --resume "
-                f"or delete the results file"
-            )
-        mode = "a"
-    else:
-        seen_ids = set()
-        mode = "w"
     fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
     if len(fixtures) != len(all_fixtures):
         parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
@@ -613,25 +751,63 @@ def main(
             parts.append(f"categories={args.categories}")
         if args.limit:
             parts.append(f"limit={args.limit}")
-        print(f"{args.model} {' '.join(parts)}", flush=True)
+        print(f"{' / '.join(models)} {' '.join(parts)}", flush=True)
+
+    # Per-model resume state. The guard compares against the FULL fixture set, so a
+    # --categories subset is a narrower view of the same fixtures, not a fixture change.
+    states: dict[str, dict[str, Any]] = {}
+    for model in models:
+        results_path = args.output_dir / f"results-{model_filename(model)}.jsonl"
+        records = resume_records(results_path) if args.resume else []
+        seen_ids = {record["id"] for record in records}
+        unknown = sorted(seen_ids - {case["id"] for case in all_fixtures})
+        if unknown:
+            raise SystemExit(
+                f"{results_path.name} contains {len(unknown)} case(s) not in the current fixtures "
+                f"(e.g. {', '.join(unknown[:3])}); the fixtures changed — run without --resume "
+                f"or delete the results file"
+            )
+        states[model] = {"path": results_path, "records": records, "seen": frozenset(seen_ids)}
+    mode = "a" if args.resume else "w"
     started = time.monotonic()
-    with results_path.open(mode, encoding="utf-8") as output:
-        records = records + run_cases(
-            args.base_url,
-            args.model,
-            fixtures,
-            output,
-            timeout=timeout,
-            retry_delay=retry_delay,
-            tolerate_errors=tolerate_errors,
-            skip=frozenset(seen_ids),
-            send_seed=not args.no_seed,
-            send_reasoning_effort=not args.no_reasoning_effort,
-        )
+    with contextlib.ExitStack() as stack:
+        outputs = {model: stack.enter_context(states[model]["path"].open(mode, encoding="utf-8")) for model in models}
+        if len(models) == 1:
+            model = models[0]
+            states[model]["records"] = states[model]["records"] + run_cases(
+                base_urls[0],
+                model,
+                fixtures,
+                outputs[model],
+                timeout=timeout,
+                retry_delay=retry_delay,
+                tolerate_errors=tolerate_errors,
+                skip=states[model]["seen"],
+                send_seed=not args.no_seed,
+                send_reasoning_effort=not args.no_reasoning_effort,
+                concurrency=args.concurrency,
+            )
+        else:
+            print(f"interleaving {len(models)} models: each case goes to every model in turn, one request at a time", flush=True)
+            new_records = run_cases_interleaved(
+                base_urls,
+                models,
+                fixtures,
+                outputs,
+                timeout=timeout,
+                retry_delay=retry_delay,
+                tolerate_errors=tolerate_errors,
+                skip_by_model={model: states[model]["seen"] for model in models},
+                send_seed=not args.no_seed,
+                send_reasoning_effort=not args.no_reasoning_effort,
+            )
+            for model in models:
+                states[model]["records"] = states[model]["records"] + new_records[model]
     # The summary covers every record, resumed ones included.
-    summary = summarize(records)
-    summary.update({"model": args.model, "elapsed_seconds": time.monotonic() - started})
-    (args.output_dir / f"summary-{model_filename(args.model)}.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
-    )
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    for model in models:
+        summary = summarize(states[model]["records"])
+        summary.update({"model": model, "elapsed_seconds": time.monotonic() - started})
+        (args.output_dir / f"summary-{model_filename(model)}.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
+        )
+        print(json.dumps(summary, ensure_ascii=False), flush=True)

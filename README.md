@@ -64,6 +64,10 @@ python3 test_quality_express_1.py --model my-model-a --output-dir runs/2026-09-2
 # only the long-context archives (or cap any run with --limit 10)
 python3 test_quality_expanded_1.py --model my-model-b --output-dir runs/2026-09-27 \
   --categories long_context
+
+# strict A/B interleave: both models answer every case, one request at a time
+python3 test_quality_express_1.py --model my-model-a,my-model-b \
+  --base-url http://127.0.0.1:8080,http://127.0.0.1:8081 --output-dir runs/2026-09-27
 ```
 
 `--make-fixtures` forces a rebuild. `--resume` skips cases already recorded in
@@ -75,13 +79,25 @@ comma-separated (`long_context` selects all four needle archives); a token that
 matches nothing is an error, so a typo cannot silently run an empty subset.
 `--limit N` caps the run to the first N selected cases (fixture order). Both
 combine with `--resume`: already-recorded cases stay skipped.
+`--concurrency N` sends N cases in parallel (single model only) — useful for
+long runs; per-case wall-clock then overlaps, so elapsed medians become load
+numbers rather than latencies. The endpoint should handle concurrent
+connections (standard for inference servers); each worker thread keeps its
+own keep-alive connection.
+Listing several comma-separated models (with matching `--base-url` entries, or
+one shared URL) interleaves them strictly: each case goes to every model in
+turn, one request in flight at a time, so machine drift (heat, cache) cannot
+favour one side and no run distorts the other's throughput. Each model gets its
+own results/summary files.
 `--base-url` defaults to `http://127.0.0.1:8080`. `test_quality_expanded_1.py`
 takes the same flags.
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 `reasoning_effort="medium"`; per-case `max_completion_tokens` come from the fixture.
 Servers that reject unknown payload fields (some llama.cpp / vLLM builds) can be
-served with `--no-reasoning-effort` and/or `--no-seed`.
+served with `--no-reasoning-effort` and/or `--no-seed`. Requests reuse a
+keep-alive TCP connection per endpoint (one per worker thread), so a run pays
+the handshake once, not once per case.
 
 ### Output
 

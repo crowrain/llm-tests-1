@@ -7,6 +7,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -300,28 +301,15 @@ class RequestPayloadTests(unittest.TestCase):
     CASE = {"id": "c1", "category": "arc_challenge", "expected": "A", "prompt": "q", "max_tokens": 32}
 
     def capture_payload(self, **kwargs):
-        class FakeResponse:
-            def __init__(self, data):
-                self.data = json.dumps(data).encode()
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self):
-                return self.data
-
         captured = {}
 
-        def fake_urlopen(req, timeout=None):
-            captured["req"] = req
-            return FakeResponse({"choices": []})
+        def fake_post(url, data, timeout=None):
+            captured["data"] = data
+            return b'{"choices": []}'
 
-        with mock.patch.object(qc.urllib.request, "urlopen", side_effect=fake_urlopen):
+        with mock.patch.object(qc, "_post_json", side_effect=fake_post):
             qc.request("http://x", "m", self.CASE, **kwargs)
-        return json.loads(captured["req"].data)
+        return json.loads(captured["data"])
 
     def test_defaults_send_seed_and_reasoning_effort(self):
         payload = self.capture_payload()
@@ -347,6 +335,150 @@ class RequestPayloadTests(unittest.TestCase):
             qc.run_cases("http://x", "m", cases, io.StringIO(), send_seed=False, send_reasoning_effort=False)
         self.assertFalse(fake.call_args.kwargs["send_seed"])
         self.assertFalse(fake.call_args.kwargs["send_reasoning_effort"])
+
+
+class KeepAliveTests(unittest.TestCase):
+    """The HTTP layer reuses one keep-alive connection per endpoint, per thread."""
+
+    CASE = {"id": "c1", "category": "arc_challenge", "expected": "A", "prompt": "q", "max_tokens": 32}
+    BASE = "http://127.0.0.1:8080"
+
+    class FakeResponse:
+        def __init__(self, body=b'{"choices": []}', status=200):
+            self.body = body
+            self.status = status
+
+        def read(self):
+            return self.body
+
+    class FakeConn:
+        instances: list = []
+
+        def __init__(self, host, port, timeout=None):
+            self.failed = False
+            self.sock = None  # not connected yet: _post_json sets conn.timeout
+            self.response = KeepAliveTests.FakeResponse()
+            KeepAliveTests.FakeConn.instances.append(self)
+
+        def request(self, method, path, body=None, headers=None, timeout=None):
+            if self.failed:
+                raise ConnectionResetError("stale keep-alive connection")
+
+        def getresponse(self):
+            return self.response
+
+    def setUp(self):
+        self.FakeConn.instances = []
+        qc._LOCAL.conns = {}
+        patcher = mock.patch.object(qc.http.client, "HTTPConnection", self.FakeConn)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_connection_is_reused_across_requests(self):
+        for _ in range(3):
+            self.assertEqual(qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0.01), {"choices": []})
+        self.assertEqual(len(self.FakeConn.instances), 1)
+
+    def test_stale_connection_is_replaced_on_retry(self):
+        qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0.01)
+        self.FakeConn.instances[0].failed = True  # server closed the idle keep-alive
+        self.assertEqual(qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0.01), {"choices": []})
+        self.assertEqual(len(self.FakeConn.instances), 2)  # dropped and reconnected
+
+    def test_http_error_is_reported_not_returned(self):
+        class Fake400(KeepAliveTests.FakeConn):
+            def __init__(self, host, port, timeout=None):
+                super().__init__(host, port, timeout)
+                self.response = KeepAliveTests.FakeResponse(b'{"error": "unknown field: seed"}', status=400)
+
+        with mock.patch.object(qc.http.client, "HTTPConnection", Fake400):
+            with self.assertRaises(RuntimeError) as ctx:
+                qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0.01)
+        self.assertIn("HTTP 400", str(ctx.exception))
+
+
+class ConcurrencyTests(unittest.TestCase):
+    def ok_response(self, case):
+        return {
+            "choices": [{"message": {"content": f"Answer: {case['expected']}."}, "finish_reason": "stop"}],
+            "usage": None,
+            "timings": {},
+        }
+
+    def test_all_cases_run_and_streamed(self):
+        cases = [{"id": f"c{i}", "category": "arc_challenge", "expected": "A", "max_tokens": 32} for i in range(6)]
+
+        def fake_request(base_url, model, case, **kwargs):
+            time.sleep(0.01)
+            return self.ok_response(case)
+
+        output = io.StringIO()
+        with mock.patch.object(qc, "request", side_effect=fake_request):
+            records = qc.run_cases("http://x", "m", cases, output, concurrency=3)
+        self.assertEqual({r["id"] for r in records}, {c["id"] for c in cases})
+        self.assertEqual(len(output.getvalue().splitlines()), 6)
+        self.assertTrue(all(json.loads(line)["correct"] for line in output.getvalue().splitlines()))
+
+    def test_errors_are_recorded_under_concurrency(self):
+        cases = [
+            {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+            {"id": "c2", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+        ]
+
+        def fake_request(base_url, model, case, **kwargs):
+            if case["id"] == "c2":
+                raise RuntimeError("boom")
+            return self.ok_response(case)
+
+        with mock.patch.object(qc, "request", side_effect=fake_request):
+            records = qc.run_cases("http://x", "m", cases, io.StringIO(), concurrency=2)
+        by_id = {r["id"]: r for r in records}
+        self.assertTrue(by_id["c1"]["correct"])
+        self.assertEqual(by_id["c2"]["error"], "RuntimeError('boom')")
+
+
+class InterleaveTests(unittest.TestCase):
+    """Strict A/B interleave: each case goes to every model in turn, one request at a time."""
+
+    CASES = [
+        {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+        {"id": "c2", "category": "arc_challenge", "expected": "B", "max_tokens": 32},
+    ]
+    MODELS = ["model-a", "model-b"]
+    URLS = ["http://a", "http://b"]
+
+    def fake_request(self, calls, base_url, model, case, **kwargs):
+        calls.append((model, case["id"]))
+        return {
+            "choices": [{"message": {"content": f"Answer: {case['expected']}."}, "finish_reason": "stop"}],
+            "usage": None,
+            "timings": {},
+        }
+
+    def test_strict_alternation_and_per_model_outputs(self):
+        calls: list = []
+        outputs = {"model-a": io.StringIO(), "model-b": io.StringIO()}
+        with mock.patch.object(qc, "request", side_effect=lambda base_url, model, case, **kw: self.fake_request(calls, base_url, model, case, **kw)):
+            records = qc.run_cases_interleaved(
+                self.URLS, self.MODELS, self.CASES, outputs,
+                timeout=1, retry_delay=0.01, tolerate_errors=True,
+                skip_by_model={"model-a": frozenset(), "model-b": frozenset()},
+            )
+        self.assertEqual(calls, [("model-a", "c1"), ("model-b", "c1"), ("model-a", "c2"), ("model-b", "c2")])
+        self.assertEqual({r["id"] for r in records["model-a"]}, {"c1", "c2"})
+        self.assertEqual({r["id"] for r in records["model-b"]}, {"c1", "c2"})
+        self.assertTrue(all(r["correct"] for r in records["model-a"] + records["model-b"]))
+
+    def test_skip_is_per_model(self):
+        calls: list = []
+        outputs = {model: io.StringIO() for model in self.MODELS}
+        with mock.patch.object(qc, "request", side_effect=lambda base_url, model, case, **kw: self.fake_request(calls, base_url, model, case, **kw)):
+            qc.run_cases_interleaved(
+                self.URLS, self.MODELS, self.CASES, outputs,
+                timeout=1, retry_delay=0.01, tolerate_errors=True,
+                skip_by_model={"model-a": frozenset({"c1"}), "model-b": frozenset()},
+            )
+        self.assertEqual(calls, [("model-b", "c1"), ("model-a", "c2"), ("model-b", "c2")])
 
 
 class SelectCasesTests(unittest.TestCase):
@@ -487,6 +619,43 @@ class SharedMainTests(unittest.TestCase):
             self.assertEqual([r["id"] for r in lines], ["c1", "c2"])
             summary = json.loads((out_dir / "summary-m.json").read_text())
             self.assertEqual(summary["total"], 2)
+
+    def test_main_interleaves_two_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            fixtures = [
+                {"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32},
+                {"id": "c2", "category": "arc_challenge", "expected": "B", "max_tokens": 32},
+            ]
+            calls: list = []
+
+            def fake_request(base_url, model, case, **kwargs):
+                calls.append((base_url, model, case["id"]))
+                return {
+                    "choices": [{"message": {"content": f"Answer: {case['expected']}."}, "finish_reason": "stop"}],
+                    "usage": None,
+                    "timings": {},
+                }
+
+            argv = ["prog", "--model", "a,b", "--base-url", "http://a,http://b", "--output-dir", str(out_dir)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request):
+                qc.main(lambda: fixtures, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
+            # Strict alternation: case 1 to both, then case 2 to both, one request at a time.
+            self.assertEqual(calls, [("http://a", "a", "c1"), ("http://b", "b", "c1"), ("http://a", "a", "c2"), ("http://b", "b", "c2")])
+            for model in ("a", "b"):
+                lines = (out_dir / f"results-{model}.jsonl").read_text().splitlines()
+                self.assertEqual(len(lines), 2)
+                summary = json.loads((out_dir / f"summary-{model}.json").read_text())
+                self.assertEqual(summary["model"], model)
+                self.assertEqual(summary["total"], 2)
+                self.assertEqual(summary["correct"], 2)
+
+    def test_main_rejects_concurrency_with_multiple_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = ["prog", "--model", "a,b", "--output-dir", str(tmp), "--concurrency", "2"]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit):
+                    qc.main(lambda: [], timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
     def test_main_omits_optional_payload_fields_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
