@@ -6,6 +6,25 @@ can be checked out and diffed.
 
 [`6518f0a`]: https://github.com/crowrain/llm-tests-1/commit/6518f0a
 
+## Unreleased
+
+### Integrity and safety fixes
+
+- Fixture replacement now runs only after the existing-results preflight, so a rejected
+  `--make-fixtures` invocation cannot leave old answers paired with new questions.
+- Real harness profiles refuse legacy fixture files without a profile identity instead of
+  guessing whether they contain express or expanded cases.
+- `--label` separates deployment identity from model id. It permits A/B tests of two servers
+  exposing the same model and rejects filename collisions before any output is opened.
+- Empty per-endpoint API-key positions are preserved (`--api-key ',secret'`), preventing a
+  key intended for one endpoint from being replicated to another.
+- Summaries now carry identities for the full fixtures, actual recorded selection, system
+  prompt, sampler flags and concurrency. `compare_quality.py` refuses incompatible
+  comparisons unless `--allow-incompatible` is explicit, and quality deltas exclude
+  transport failures while request accuracy remains visible separately.
+- Completion response validation now covers the response object, message and content types;
+  malformed successful HTTP responses are recorded as infrastructure errors in tolerant mode.
+
 ## 2026-09-27
 
 ### Bug fixes

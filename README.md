@@ -72,6 +72,11 @@ python3 test_quality_expanded_1.py --model my-model-b --output-dir runs/2026-09-
 python3 test_quality_express_1.py --model my-model-a,my-model-b \
   --base-url http://127.0.0.1:8080,http://127.0.0.1:8081 --output-dir runs/2026-09-27
 
+# compare two deployments that expose the same model id
+python3 test_quality_express_1.py --model same-model,same-model \
+  --label llama-cuda,vllm-rocm \
+  --base-url http://127.0.0.1:8080,http://127.0.0.1:8081 --output-dir runs/2026-09-27
+
 # an endpoint that wants a bearer token
 OPENAI_API_KEY=sk-... python3 test_quality_express_1.py \
   --model my-model-a --output-dir runs/2026-09-27 --base-url https://endpoint.example
@@ -82,12 +87,13 @@ OPENAI_API_KEY=sk-... python3 test_quality_express_1.py \
 | Flag | Meaning |
 |---|---|
 | `--model` | model id (required). Comma-separated ids switch the run to a strict A/B interleave. |
+| `--label` | output/deployment label. Comma-separated labels must match `--model`; use them when deployments expose the same model id or filename-safe ids would collide. |
 | `--base-url` | endpoint, default `http://127.0.0.1:8080`. Comma-separated entries must match the `--model` count, or a single URL is shared by all models. |
-| `--api-key` | bearer token for endpoints that require one. Defaults to `$OPENAI_API_KEY`. Follows the same comma-separated rule as `--base-url`, so each side of an interleave can carry its own key. |
-| `--output-dir` | directory for `fixtures.json`, `results-<model>.jsonl`, `summary-<model>.json` (created if missing). |
+| `--api-key` | bearer token for endpoints that require one. Defaults to `$OPENAI_API_KEY`. Entries match `--model`; an empty position means no key for that endpoint (`--api-key ',secret'`). |
+| `--output-dir` | directory for `fixtures.json`, `results-<label>.jsonl`, `summary-<label>.json` (created if missing). |
 | `--make-fixtures` | force a rebuild of `fixtures.json`. Cannot be combined with `--resume`. |
-| `--resume` | skip cases already recorded in `results-<model>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
-| `--overwrite` | replace an existing `results-<model>.jsonl` instead of refusing to run. Without it, a run that would discard recorded cases stops and names both ways forward. |
+| `--resume` | skip cases already recorded in `results-<label>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
+| `--overwrite` | replace an existing `results-<label>.jsonl` instead of refusing to run. Without it, a run that would discard recorded cases stops and names both ways forward. |
 | `--categories` | run a subset by category — exact names or prefixes, comma-separated (`long_context` selects all four needle archives). A token matching nothing is an error, so a typo cannot silently run an empty subset. |
 | `--limit N` | cap the run to the first N selected cases (fixture order). Combines with `--resume`: already-recorded cases stay skipped. |
 | `--concurrency N` | send N cases in parallel (single model only, default 1). Per-case wall-clock then overlaps, so elapsed medians become load numbers rather than latencies — the run prints a note. Each worker thread keeps its own keep-alive connection; the endpoint should handle concurrent connections (standard for inference servers). |
@@ -100,7 +106,7 @@ Listing several models interleaves them strictly: case 1 → model a, case 1 →
 model b, case 2 → model a, … — one request in flight at a time. Each model's
 answers span the same time window, so machine drift (heat, cache) cannot
 systematically favour one side, and no run distorts the other's throughput. Each
-model gets its own results/summary files; `--resume` works per model.
+deployment label gets its own results/summary files; `--resume` works per label.
 `--concurrency` is rejected with multiple models by design.
 
 ### Authentication
@@ -108,8 +114,10 @@ model gets its own results/summary files; `--resume` works per model.
 An endpoint that wants a bearer token gets one from `$OPENAI_API_KEY`, or from `--api-key`
 if it is given (the flag wins). Prefer the environment variable: a command line is visible
 to other users through `ps`. The key is sent as `Authorization: Bearer <key>` and goes
-nowhere else — not into the progress log, `results-<model>.jsonl` or `summary-<model>.json`.
+nowhere else — not into the progress log, `results-<label>.jsonl` or `summary-<label>.json`.
 Keys themselves must not contain a comma, since that is how per-model entries are split.
+Empty positions are preserved, so a mixed public/authenticated pair can use
+`--api-key ',sk-...'` without sending the secret to the public endpoint.
 
 ### Request payload
 
@@ -124,26 +132,31 @@ dead or closed connection is dropped and reconnected on retry.
 ```
 runs/2026-09-27/
   fixtures.json              the pinned cases (version + profile header + cases), reused by later models
-  results-<model>.jsonl      one record per case, full content kept
-  summary-<model>.json       accuracy by category, throughput, truncation counts
+  results-<label>.jsonl      one record per case, full content kept
+  summary-<label>.json       accuracy, run identity, throughput, truncation counts
 ```
 
-A run never discards recorded cases by accident. `results-<model>.jsonl` is replaced only
+A run never discards recorded cases by accident. `results-<label>.jsonl` is replaced only
 on a fresh run or with `--overwrite`; otherwise the harness refuses and points at `--resume`.
 That matters for the obvious follow-up — "let me just re-check the long-context cases" with
 `--categories long_context` — which would otherwise truncate a finished run's records and
 overwrite its summary with the subset.
 
-Model ids that contain path separators or spaces are flattened to `_` in the
-output file names (`org/model` → `results-org_model.jsonl`).
+Model ids (or explicit labels) that contain path separators or spaces are flattened to `_`
+in output file names (`org/model` → `results-org_model.jsonl`). The harness refuses two
+labels that flatten to the same name; pass distinct `--label` values to disambiguate them.
 
 Fixtures carry a `version` and a `profile` header, and both are checked on read. A
 `version` newer than the harness understands is refused rather than guessed at, and a
 profile mismatch is refused too: both harnesses cache under the same `fixtures.json`
 name, so give each profile its own `--output-dir` (or pass `--make-fixtures`, which
-rebuilds and discards the other profile's comparison). Pre-versioning bare-array
-`fixtures.json` files are still read, and a file written before the profile header
-existed loads with a warning.
+rebuilds and discards the other profile's comparison). A harness refuses legacy fixtures
+without a profile header because their suite cannot be established safely; rebuild them with
+`--make-fixtures`. Library callers that do not request a profile can still read the old layout.
+
+Before rebuilding fixtures, the harness checks every target results file. If a recorded run
+would be invalidated, `--make-fixtures` stops without touching `fixtures.json`; use
+`--overwrite` or another output directory deliberately.
 
 ## Comparison
 
@@ -159,8 +172,13 @@ python3 compare_quality.py runs/a/summary-model-a.json runs/b/summary-model-b.js
   --output comparison.json
 ```
 
-It prints overall and per-category accuracy with the delta (second model minus
-first), truncation and error counts, and median prefill/decode throughput.
+It prints overall and per-category accuracy with the delta (second model minus first),
+truncation and error counts, and median prefill/decode throughput. Quality deltas use
+`accuracy_excluding_errors`; request accuracy remains visible separately. Summaries carry a
+profile and SHA-256 identities for the full fixtures, actual scored selection and system
+prompt, plus the sampler flags and concurrency. The comparison refuses mismatched or legacy
+summaries. `--allow-incompatible` is the explicit escape hatch when such a comparison is
+intentional.
 
 ## Scoring
 
@@ -239,7 +257,7 @@ their own labels, so old runs stay comparable.
 
 The scoring, extraction, summary, run-loop, HTTP-layer and CLI (fixtures, resume,
 subset selection, payload flags, concurrency, interleave) helpers are covered by
-111 stdlib-only regression tests (no endpoint and no network needed — the request
+stdlib-only regression tests (no endpoint and no network needed — the request
 layer is mocked, including the markdown, degenerate-response and fixture-header
 regressions above):
 

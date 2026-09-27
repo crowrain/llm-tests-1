@@ -133,10 +133,18 @@ class SummaryTests(unittest.TestCase):
         summary = qc.summarize(self.make_records())
         stats = summary["by_category"]["gsm8k"]
         self.assertEqual(stats["total"], 3)
+        self.assertEqual(stats["errors"], 1)
+        self.assertEqual(stats["scored"], 2)
+        self.assertAlmostEqual(stats["accuracy_excluding_errors"], 0.5)
         self.assertEqual(stats["truncated"], 0)
         self.assertAlmostEqual(stats["median_elapsed_seconds"], 2.0)
         self.assertIsNone(stats["median_prefill_tps"])
         self.assertIsNone(stats["median_decode_tps"])
+
+    def test_all_errors_have_no_quality_accuracy(self):
+        summary = qc.summarize([self.make_records()[-1]])
+        self.assertIsNone(summary["accuracy_excluding_errors"])
+        self.assertIsNone(summary["by_category"]["gsm8k"]["accuracy_excluding_errors"])
 
 
 class FilenameTests(unittest.TestCase):
@@ -246,6 +254,7 @@ class CompareTests(unittest.TestCase):
             "total": 10,
             "correct": int(round(accuracy * 10)),
             "accuracy": accuracy,
+            "accuracy_excluding_errors": accuracy,
             "truncated": 1,
             "errors": 0,
             "median_prefill_tps": None,
@@ -255,11 +264,27 @@ class CompareTests(unittest.TestCase):
                     "total": 10,
                     "correct": int(round(accuracy * 10)),
                     "accuracy": accuracy,
+                    "accuracy_excluding_errors": accuracy,
                     "truncated": 1,
                     "median_prefill_tps": None,
                     "median_decode_tps": decode_tps,
                     "median_elapsed_seconds": 1.0,
                 }
+            },
+            "run_identity": {
+                "schema_version": 1,
+                "profile": "express",
+                "fixtures_sha256": "fixtures",
+                "selection_sha256": "selection",
+                "case_ids": ["c1"],
+                "request_options": {
+                    "temperature": 0,
+                    "top_p": 1,
+                    "seed": 20260926,
+                    "reasoning_effort": "medium",
+                    "concurrency": 1,
+                    "system_sha256": "system",
+                },
             },
         }
 
@@ -305,6 +330,44 @@ class CompareTests(unittest.TestCase):
         self.assertAlmostEqual(data["delta_accuracy"], -0.1)
         self.assertAlmostEqual(data["by_category"]["gsm8k"]["delta"], -0.1)
         self.assertEqual(data["a"]["model"], "model-a")
+
+    def test_quality_delta_excludes_transport_errors(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        a["accuracy_excluding_errors"] = 0.8
+        b["accuracy_excluding_errors"] = 0.9
+        self.assertAlmostEqual(cq.as_json("a", a, "b", b)["delta_accuracy"], 0.1)
+
+    def test_json_preserves_deployment_label_and_model(self):
+        a = self.make_summary("shared-model", 0.5, 10.0)
+        a["label"] = "engine-a"
+        data = cq.as_json("engine-a", a, "engine-b", self.make_summary("shared-model", 0.5, 10.0))
+        self.assertEqual(data["a"]["name"], "engine-a")
+        self.assertEqual(data["a"]["label"], "engine-a")
+        self.assertEqual(data["a"]["model"], "shared-model")
+
+    def test_compatibility_rejects_different_selections(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        b["run_identity"]["selection_sha256"] = "other"
+        self.assertTrue(cq.compatibility_issues(a, b))
+
+    def test_compatibility_accepts_same_run_identity(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        self.assertEqual(cq.compatibility_issues(a, b), [])
+
+    def test_compatibility_rejects_different_request_options(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        b["run_identity"]["request_options"]["concurrency"] = 2
+        self.assertTrue(cq.compatibility_issues(a, b))
+
+    def test_compatibility_rejects_missing_identity_fields(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        del b["run_identity"]["selection_sha256"]
+        self.assertTrue(cq.compatibility_issues(a, b))
 
 
 class RequestPayloadTests(unittest.TestCase):
@@ -494,6 +557,20 @@ class InterleaveTests(unittest.TestCase):
                 skip_by_model={"model-a": frozenset({"c1"}), "model-b": frozenset()},
             )
         self.assertEqual(calls, [("model-b", "c1"), ("model-a", "c2"), ("model-b", "c2")])
+
+    def test_duplicate_labels_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "labels must be unique"):
+            qc.run_cases_interleaved(
+                self.URLS,
+                self.MODELS,
+                self.CASES,
+                {"same": io.StringIO()},
+                timeout=1,
+                retry_delay=0.01,
+                tolerate_errors=True,
+                skip_by_model={"same": frozenset()},
+                labels=["same", "same"],
+            )
 
 
 class SelectCasesTests(unittest.TestCase):
@@ -692,6 +769,36 @@ class SharedMainTests(unittest.TestCase):
                 self.assertEqual(summary["total"], 2)
                 self.assertEqual(summary["correct"], 2)
 
+    def test_labels_allow_same_model_id_on_two_deployments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            calls = []
+
+            def fake_request(base_url, model, case, **kwargs):
+                calls.append((base_url, model))
+                return {"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}
+
+            argv = [
+                "prog", "--model", "same,same", "--label", "engine-a,engine-b",
+                "--base-url", "http://a,http://b", "--output-dir", str(out_dir),
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request):
+                qc.main(
+                    lambda: self.fixtures()[:1], timeout=1, retry_delay=0,
+                    tolerate_errors=True, description="t",
+                )
+            self.assertEqual(calls, [("http://a", "same"), ("http://b", "same")])
+            self.assertTrue((out_dir / "results-engine-a.jsonl").exists())
+            self.assertTrue((out_dir / "results-engine-b.jsonl").exists())
+            self.assertEqual(json.loads((out_dir / "summary-engine-a.json").read_text())["model"], "same")
+
+    def test_colliding_output_names_require_distinct_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = ["prog", "--model", "org/model,org_model", "--output-dir", str(tmp)]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit):
+                    qc.main(lambda: [], timeout=1, retry_delay=0, tolerate_errors=True, description="t")
+
     def test_main_rejects_concurrency_with_multiple_models(self):
         with tempfile.TemporaryDirectory() as tmp:
             argv = ["prog", "--model", "a,b", "--output-dir", str(tmp), "--concurrency", "2"]
@@ -798,11 +905,21 @@ class NoUsableChoiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.process({"choices": []}, tolerate_errors=False)
 
-    def test_null_message_and_timings_do_not_crash(self):
+    def test_null_message_is_recorded_as_a_failed_response(self):
         record = self.process({"choices": [{"message": None, "finish_reason": "stop"}], "timings": None})
-        self.assertIsNone(record["error"])
+        self.assertIsNotNone(record["error"])
         self.assertEqual(record["content"], "")
         self.assertEqual(record["timings"], {})
+
+    def test_non_object_message_and_non_text_content_are_recorded(self):
+        responses = (
+            {"choices": [{"message": "not-an-object"}]},
+            {"choices": [{"message": {"content": ["not", "text"]}}]},
+            ["not-an-object"],
+        )
+        for response in responses:
+            with self.subTest(response=response):
+                self.assertIsNotNone(self.process(response)["error"])
 
     def test_summarize_tolerates_null_timings(self):
         # An older results file being resumed can carry the key explicitly null.
@@ -841,13 +958,19 @@ class FixtureHeaderTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 qc.load_fixtures(path, "expanded")
 
-    def test_older_header_without_profile_loads_with_a_warning(self):
+    def test_older_header_without_profile_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "fixtures.json"
             self.write(path, version=1)
-            with mock.patch("builtins.print") as printed:
-                self.assertEqual(qc.load_fixtures(path, "expanded"), self.fixtures())
-            self.assertIn("no profile header", printed.call_args[0][0])
+            with self.assertRaises(SystemExit):
+                qc.load_fixtures(path, "expanded")
+
+    def test_bare_array_is_refused_when_profile_is_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            path.write_text(json.dumps(self.fixtures()))
+            with self.assertRaises(SystemExit):
+                qc.load_fixtures(path, "expanded")
 
     def test_expanded_harness_refuses_an_express_fixture_directory(self):
         """The whole point: reusing the other profile's pinned cases must not be silent."""
@@ -911,6 +1034,20 @@ class OverwriteGuardTests(unittest.TestCase):
         # The point of the guard: nothing was lost.
         self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
         self.assertEqual(json.loads((self.out_dir / "summary-m.json").read_text())["total"], 2)
+
+    def test_make_fixtures_cannot_replace_fixture_before_results_guard(self):
+        self.run_main(self.out_dir)
+        fixture_before = (self.out_dir / "fixtures.json").read_text()
+        argv = ["prog", "--model", "m", "--output-dir", str(self.out_dir), "--make-fixtures"]
+        make_cases = mock.Mock(side_effect=AssertionError("preflight must run before fixture construction"))
+        with mock.patch.object(sys, "argv", argv):
+            with self.assertRaises(SystemExit):
+                qc.main(
+                    make_cases, timeout=1, retry_delay=0,
+                    tolerate_errors=True, description="t", profile="p",
+                )
+        make_cases.assert_not_called()
+        self.assertEqual((self.out_dir / "fixtures.json").read_text(), fixture_before)
 
     def test_overwrite_replaces_deliberately(self):
         self.run_main(self.out_dir)
@@ -1017,6 +1154,16 @@ class PerModelFlagTests(unittest.TestCase):
     def test_whitespace_is_trimmed(self):
         self.assertEqual(qc.per_model(" u1 , u2 ", ["a", "b"], "--api-key", "key"), ["u1", "u2"])
 
+    def test_required_values_reject_empty_positions(self):
+        with self.assertRaises(SystemExit):
+            qc.per_model("u1,,u3", ["a", "b", "c"], "--base-url", "URL")
+
+    def test_optional_values_preserve_empty_positions(self):
+        self.assertEqual(
+            qc.per_model_optional(",secret", ["a", "b"], "--api-key", "key"),
+            [None, "secret"],
+        )
+
 
 class ApiKeyCliTests(unittest.TestCase):
     """The CLI resolves the key from --api-key, then $OPENAI_API_KEY, then not at all."""
@@ -1087,6 +1234,25 @@ class ApiKeyCliTests(unittest.TestCase):
                 tolerate_errors=True, description="t", profile="p",
             )
         self.assertEqual(seen, {"a": "k-a", "b": "k-b"})
+
+    def test_interleave_does_not_replicate_key_across_an_empty_slot(self):
+        qc.write_fixtures(self.out_dir / "fixtures.json", self.fixtures(), "p")
+        seen = {}
+
+        def fake_request(base_url, model, case, **kwargs):
+            seen[model] = kwargs.get("api_key")
+            return {"choices": [{"message": {"content": "#### 1"}, "finish_reason": "stop"}]}
+
+        argv = [
+            "prog", "--model", "a,b", "--base-url", "http://a,http://b",
+            "--output-dir", str(self.out_dir), "--api-key", ",k-b",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request):
+            qc.main(
+                lambda: self.fixtures(), timeout=1, retry_delay=0,
+                tolerate_errors=True, description="t", profile="p",
+            )
+        self.assertEqual(seen, {"a": None, "b": "k-b"})
 
 
 class SharedCaseBuilderTests(unittest.TestCase):

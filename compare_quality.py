@@ -3,8 +3,9 @@
 
 Reads the summary-<model>.json files the harnesses write and answers the
 question the harnesses exist for: which deployment answered better, and how
-fast? Prints overall and per-category accuracy with deltas, truncation and
-error counts, and median prefill/decode throughput.
+fast? It first verifies that profile, fixtures, recorded selection and request options match,
+then prints accuracy over scored responses alongside request accuracy, truncation
+and error counts, and median prefill/decode throughput.
 
 Usage:
   python3 compare_quality.py runs/2026-09-27
@@ -30,8 +31,52 @@ Pair = tuple[str, dict[str, Any]]
 
 def _load_summary(path: Path) -> Pair:
     summary = json.loads(path.read_text())
-    model = summary.get("model") or path.name.removeprefix("summary-").removesuffix(".json")
-    return model, summary
+    name = summary.get("label") or summary.get("model") or path.name.removeprefix("summary-").removesuffix(".json")
+    return name, summary
+
+
+def compatibility_issues(s_a: dict[str, Any], s_b: dict[str, Any]) -> list[str]:
+    """Explain why two summaries are not proven to cover the same work."""
+    identity_a = s_a.get("run_identity")
+    identity_b = s_b.get("run_identity")
+    if not isinstance(identity_a, dict) or not isinstance(identity_b, dict):
+        return ["one or both summaries have no run_identity (they predate compatibility metadata)"]
+    issues = []
+    required = {
+        "schema_version",
+        "profile",
+        "fixtures_sha256",
+        "selection_sha256",
+        "case_ids",
+        "request_options",
+    }
+    for side, identity in (("first", identity_a), ("second", identity_b)):
+        missing = sorted(required - identity.keys())
+        if missing:
+            issues.append(f"{side} run_identity is missing {', '.join(missing)}")
+    if issues:
+        return issues
+    if identity_a["schema_version"] != 1 or identity_b["schema_version"] != 1:
+        issues.append(
+            "unsupported run_identity schema "
+            f"({identity_a['schema_version']!r}, {identity_b['schema_version']!r})"
+        )
+    for key, description in (
+        ("profile", "harness profile"),
+        ("fixtures_sha256", "full fixture set"),
+        ("selection_sha256", "scored case selection"),
+        ("request_options", "request and concurrency options"),
+    ):
+        if identity_a.get(key) != identity_b.get(key):
+            issues.append(f"{description} differs ({identity_a.get(key)!r} != {identity_b.get(key)!r})")
+    return issues
+
+
+def quality_accuracy(summary: dict[str, Any]) -> Any:
+    """Accuracy over actual model responses; transport failures are availability, not quality."""
+    if "accuracy_excluding_errors" in summary:
+        return summary.get("accuracy_excluding_errors")
+    return summary.get("accuracy")
 
 
 def resolve(paths: list[Path]) -> tuple[Pair, Pair]:
@@ -98,8 +143,10 @@ def render(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) -
         return f"  {label:<16} {a:<{width}} {b:<{width}} {delta}"
 
     lines.append("Overall")
-    acc_a, acc_b = s_a.get("accuracy"), s_b.get("accuracy")
-    lines.append(row("accuracy", _pct(acc_a), _pct(acc_b), _pp(acc_a, acc_b)))
+    acc_a, acc_b = quality_accuracy(s_a), quality_accuracy(s_b)
+    lines.append(row("scored accuracy", _pct(acc_a), _pct(acc_b), _pp(acc_a, acc_b)))
+    raw_a, raw_b = s_a.get("accuracy"), s_b.get("accuracy")
+    lines.append(row("request accuracy", _pct(raw_a), _pct(raw_b), _pp(raw_a, raw_b)))
     lines.append(
         row(
             "correct",
@@ -117,8 +164,8 @@ def render(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) -
     for category in categories:
         cat_a = s_a.get("by_category", {}).get(category)
         cat_b = s_b.get("by_category", {}).get(category)
-        cat_acc_a = cat_a.get("accuracy") if isinstance(cat_a, dict) else None
-        cat_acc_b = cat_b.get("accuracy") if isinstance(cat_b, dict) else None
+        cat_acc_a = quality_accuracy(cat_a) if isinstance(cat_a, dict) else None
+        cat_acc_b = quality_accuracy(cat_b) if isinstance(cat_b, dict) else None
         lines.append(row(category, _pct(cat_acc_a), _pct(cat_acc_b), _pp(cat_acc_a, cat_acc_b)))
     lines.append("")
     lines.append("Speed (medians)")
@@ -135,6 +182,7 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
             key: summary.get(key)
             for key in (
                 "accuracy",
+                "accuracy_excluding_errors",
                 "correct",
                 "total",
                 "truncated",
@@ -148,16 +196,27 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
     def delta(a: Any, b: Any) -> Any:
         return (b - a) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else None
 
+    def side(name: str, summary: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "name": name,
+            "model": summary.get("model") or name,
+            "label": summary.get("label") or name,
+            **subset(summary),
+        }
+
     by_category: dict[str, Any] = {}
     categories = sorted(set(s_a.get("by_category", {})) | set(s_b.get("by_category", {})))
     for category in categories:
-        acc_a = s_a.get("by_category", {}).get(category, {}).get("accuracy")
-        acc_b = s_b.get("by_category", {}).get(category, {}).get("accuracy")
+        cat_a = s_a.get("by_category", {}).get(category, {})
+        cat_b = s_b.get("by_category", {}).get(category, {})
+        acc_a = quality_accuracy(cat_a)
+        acc_b = quality_accuracy(cat_b)
         by_category[category] = {"a": acc_a, "b": acc_b, "delta": delta(acc_a, acc_b)}
     return {
-        "a": {"model": name_a, **subset(s_a)},
-        "b": {"model": name_b, **subset(s_b)},
-        "delta_accuracy": delta(s_a.get("accuracy"), s_b.get("accuracy")),
+        "a": side(name_a, s_a),
+        "b": side(name_b, s_b),
+        "delta_accuracy": delta(quality_accuracy(s_a), quality_accuracy(s_b)),
+        "delta_request_accuracy": delta(s_a.get("accuracy"), s_b.get("accuracy")),
         "by_category": by_category,
     }
 
@@ -171,10 +230,22 @@ def main() -> None:
         help="one output directory with two summaries, or two summary files / directories",
     )
     parser.add_argument("--output", type=Path, help="also write the comparison as JSON to this path")
+    parser.add_argument(
+        "--allow-incompatible",
+        action="store_true",
+        help="compare even when profile/fixture/selection/request identity is missing or differs",
+    )
     args = parser.parse_args()
     if not 1 <= len(args.paths) <= 2:
         raise SystemExit("pass one output directory or exactly two summaries")
     (name_a, s_a), (name_b, s_b) = resolve(args.paths)
+    issues = compatibility_issues(s_a, s_b)
+    if issues and not args.allow_incompatible:
+        details = "; ".join(issues)
+        raise SystemExit(
+            f"refusing a non-like-for-like comparison: {details}. "
+            "Use --allow-incompatible only if this difference is intentional"
+        )
     print(render(name_a, s_a, name_b, s_b), flush=True)
     if args.output:
         args.output.write_text(json.dumps(as_json(name_a, s_a, name_b, s_b), ensure_ascii=False, indent=2) + "\n")

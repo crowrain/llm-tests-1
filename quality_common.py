@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -481,6 +482,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     result["accuracy"] = result["correct"] / result["total"] if result["total"] else 0
     for category in sorted({r["category"] for r in records}):
         rows = [r for r in records if r["category"] == category]
+        clean_rows = [r for r in rows if not r.get("error")]
         # Records from runs older than this field may lack it (e.g. a --resume of an old
         # results file); a missing median is not an error.
         elapsed = [r["elapsed_seconds"] for r in rows if isinstance(r.get("elapsed_seconds"), (int, float))]
@@ -488,6 +490,11 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             "total": len(rows),
             "correct": sum(r["correct"] for r in rows),
             "accuracy": sum(r["correct"] for r in rows) / len(rows),
+            "errors": len(rows) - len(clean_rows),
+            "scored": len(clean_rows),
+            "accuracy_excluding_errors": (
+                sum(r["correct"] for r in clean_rows) / len(clean_rows) if clean_rows else None
+            ),
             "truncated": sum(1 for r in rows if r.get("truncated")),
             "median_prefill_tps": median_timing(rows, "prompt_per_second"),
             "median_decode_tps": median_timing(rows, "predicted_per_second"),
@@ -498,7 +505,8 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     # so it is counted apart instead of dragging accuracy down silently.
     result["errors"] = sum(1 for r in records if r.get("error"))
     clean = [r for r in records if not r.get("error")]
-    result["accuracy_excluding_errors"] = sum(r["correct"] for r in clean) / len(clean) if clean else 0
+    result["scored"] = len(clean)
+    result["accuracy_excluding_errors"] = sum(r["correct"] for r in clean) / len(clean) if clean else None
     result["truncated"] = sum(1 for r in records if r.get("truncated"))
     result["answer_empty"] = sum(1 for r in clean if r.get("answer_empty"))
     result["wrong_and_truncated"] = sum(1 for r in clean if r.get("truncated") and not r["correct"])
@@ -541,21 +549,31 @@ def _process_case(
             send_reasoning_effort=send_reasoning_effort,
             api_key=api_key,
         )
+        if not isinstance(response, dict):
+            raise RuntimeError(f"response is not a JSON object: {type(response).__name__}")
         # A response carrying no usable choice holds no answer, so it is a failed request
         # rather than an empty one: raised here, inside the try, so the mode below decides
         # (record it or abort). Reaching for [0] after the try crashed even a tolerant run.
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
             raise RuntimeError(f"response carried no usable choice: {json.dumps(response)[:300]}")
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError(f"response choice carried no usable message: {json.dumps(choice)[:300]}")
+        raw_content = message.get("content")
+        if raw_content is not None and not isinstance(raw_content, str):
+            raise RuntimeError(
+                f"response message content is not text or null: {type(raw_content).__name__}"
+            )
     except Exception as exc:
         if not tolerate_errors:
             raise
         error = repr(exc)
         response = {}
-    # Either the try validated choices[0] as a dict, or it left `response` empty.
+    # Either the try validated the completion shape, or it left `response` empty.
     choice = response.get("choices", [{}])[0]
-    # `or {}` rather than a get() default: these keys may be present and explicitly null.
-    message = choice.get("message") or {}
+    message = choice.get("message", {})
     content = message.get("content") or ""
     reasoning_content = message.get("reasoning_content")
     finish_reason = choice.get("finish_reason")
@@ -683,26 +701,34 @@ def run_cases_interleaved(
     send_seed: bool = True,
     send_reasoning_effort: bool = True,
     api_keys: list[str | None] | None = None,
+    labels: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Strict A/B interleave: for every case, ask each model in turn, one request in
     flight at a time. Each model's answers thus span the same time window, so machine
     drift (heat, cache) cannot systematically favour one side, and no run distorts the
     other's throughput. Records stream to each model's own output in request order.
     """
-    records_by_model: dict[str, list[dict[str, Any]]] = {model: [] for model in models}
-    pending_by_model = {model: [case for case in cases if case["id"] not in skip_by_model[model]] for model in models}
-    for model in models:
-        if skip_by_model[model]:
+    run_labels = labels if labels is not None else models
+    if len(run_labels) != len(models):
+        raise ValueError("labels and models must have the same length")
+    if len(set(run_labels)) != len(run_labels):
+        raise ValueError("labels must be unique")
+    records_by_model: dict[str, list[dict[str, Any]]] = {label: [] for label in run_labels}
+    pending_by_model = {
+        label: [case for case in cases if case["id"] not in skip_by_model[label]] for label in run_labels
+    }
+    for label in run_labels:
+        if skip_by_model[label]:
             print(
-                f"{model} resuming: {len(skip_by_model[model])} of {len(cases)} cases "
+                f"{label} resuming: {len(skip_by_model[label])} of {len(cases)} cases "
                 f"already recorded, skipping them",
                 flush=True,
             )
     keys = api_keys if api_keys is not None else [None] * len(models)
     started = time.monotonic()
     for case in cases:
-        for model, base_url, api_key in zip(models, base_urls, keys):
-            if case["id"] in skip_by_model[model]:
+        for label, model, base_url, api_key in zip(run_labels, models, base_urls, keys):
+            if case["id"] in skip_by_model[label]:
                 continue
             record = _process_case(
                 base_url,
@@ -716,15 +742,15 @@ def run_cases_interleaved(
                 api_key=api_key,
             )
             _emit(
-                outputs[model],
-                model,
-                len(records_by_model[model]) + 1,
-                len(pending_by_model[model]),
+                outputs[label],
+                label,
+                len(records_by_model[label]) + 1,
+                len(pending_by_model[label]),
                 case,
                 record,
                 started,
             )
-            records_by_model[model].append(record)
+            records_by_model[label].append(record)
     return records_by_model
 
 
@@ -733,6 +759,12 @@ def run_cases_interleaved(
 # Bumped if the fixture file layout changes; old runs keep their own files, so pinned cases
 # (and their needle labels) stay comparable. Version 2 added the `profile` header.
 FIXTURES_VERSION = 2
+
+
+def cases_sha256(cases: list[dict[str, Any]]) -> str:
+    """Stable identity for an ordered case list, independent of JSON whitespace."""
+    encoded = json.dumps(cases, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def write_fixtures(
@@ -755,10 +787,18 @@ def load_fixtures(fixture_path: Path, profile: str | None = None) -> list[dict[s
     cache under the same `fixtures.json` name — without this check, running the expanded
     harness in a directory an express run had created silently re-ran the 72 express cases
     and wrote them out as an expanded result. Pre-versioning files were bare case arrays and
-    still load.
+    still load only for callers that do not request a profile. A real harness always requests
+    one and refuses legacy files: without a profile there is no safe way to tell 72 express
+    cases from 266 expanded cases.
     """
     data = json.loads(fixture_path.read_text())
     if isinstance(data, list):
+        if profile:
+            raise SystemExit(
+                f"{fixture_path} is a legacy bare-array fixture file with no profile identity; "
+                f"refusing to assume it belongs to {profile!r}. Rebuild it with --make-fixtures "
+                "or use a different --output-dir"
+            )
         return data
     if not isinstance(data, dict) or not isinstance(data.get("cases"), list):
         raise ValueError(f"unrecognized fixtures.json format: {fixture_path}")
@@ -776,10 +816,9 @@ def load_fixtures(fixture_path: Path, profile: str | None = None) -> list[dict[s
             f"--make-fixtures to rebuild, discarding the {found!r} comparison)"
         )
     if profile and found is None:
-        print(
-            f"warning: {fixture_path.name} carries no profile header (written by an older "
-            f"build); assuming its cases are {profile!r}",
-            flush=True,
+        raise SystemExit(
+            f"{fixture_path} carries no profile header, so it cannot be verified as {profile!r}; "
+            "rebuild it with --make-fixtures or use a different --output-dir"
         )
     return data["cases"]
 
@@ -849,7 +888,9 @@ def per_model(value: str, models: list[str], flag: str, what: str) -> list[str]:
 
     Used for --base-url and --api-key, which must line up with --model in interleave mode.
     """
-    entries = [item.strip() for item in value.split(",") if item.strip()]
+    entries = [item.strip() for item in value.split(",")]
+    if any(not item for item in entries):
+        raise SystemExit(f"{flag} contains an empty {what}")
     if len(entries) == 1 and len(models) > 1:
         entries = entries * len(models)
     if len(entries) != len(models):
@@ -857,6 +898,23 @@ def per_model(value: str, models: list[str], flag: str, what: str) -> list[str]:
             f"comma-separated {flag} entries must match the --model count (or be a single shared {what})"
         )
     return entries
+
+
+def per_model_optional(value: str, models: list[str], flag: str, what: str) -> list[str | None]:
+    """Resolve an optional comma-separated value without losing empty positions.
+
+    An empty API-key slot is meaningful: `,secret` means no key for the first endpoint and
+    `secret` for the second. Dropping the empty slot would replicate the secret to both.
+    """
+    entries = [item.strip() for item in value.split(",")]
+    if len(entries) == 1 and len(models) > 1:
+        entries = entries * len(models)
+    if len(entries) != len(models):
+        raise SystemExit(
+            f"comma-separated {flag} entries must match the --model count "
+            f"(or be a single shared {what})"
+        )
+    return [item or None for item in entries]
 
 
 def main(
@@ -878,6 +936,13 @@ def main(
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--model", required=True, help="model id, or comma-separated ids for an A/B interleave")
+    parser.add_argument(
+        "--label",
+        help=(
+            "output label, or comma-separated labels matching --model. Required when two deployments "
+            "use the same model id or their filename-safe ids collide"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--base-url",
@@ -932,42 +997,33 @@ def main(
         raise SystemExit("--resume and --overwrite are opposites: one continues a run, the other replaces it")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be at least 1")
-    models = [model.strip() for model in args.model.split(",") if model.strip()]
-    if not models:
-        raise SystemExit("--model is empty")
+    models = [model.strip() for model in args.model.split(",")]
+    if any(not model for model in models):
+        raise SystemExit("--model contains an empty model id")
+    labels = per_model(args.label, models, "--label", "label") if args.label else list(models)
+    safe_labels = [model_filename(label) for label in labels]
+    if len(set(safe_labels)) != len(safe_labels):
+        raise SystemExit(
+            "output labels are not unique after filename sanitization; pass distinct --label entries "
+            "for each deployment"
+        )
     base_urls = per_model(args.base_url, models, "--base-url", "URL")
     # The key is never echoed: not into the log, the records or the summary.
     raw_key = args.api_key if args.api_key is not None else os.environ.get("OPENAI_API_KEY", "")
-    api_keys: list[str | None] = (
-        list(per_model(raw_key, models, "--api-key", "key")) if raw_key.strip() else [None] * len(models)
-    )
+    api_keys = per_model_optional(raw_key, models, "--api-key", "key")
     if len(models) > 1 and args.concurrency > 1:
         raise SystemExit("--concurrency is not supported with multiple models: the interleave is sequential by design")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    fixture_path = args.output_dir / "fixtures.json"
-    if args.make_fixtures or not fixture_path.exists():
-        all_fixtures = make_cases()
-        write_fixtures(fixture_path, all_fixtures, profile)
-    else:
-        all_fixtures = load_fixtures(fixture_path, profile)
-    fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
-    if len(fixtures) != len(all_fixtures):
-        parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
-        if args.categories:
-            parts.append(f"categories={args.categories}")
-        if args.limit:
-            parts.append(f"limit={args.limit}")
-        print(f"{' / '.join(models)} {' '.join(parts)}", flush=True)
 
-    # Per-model resume state. The guard compares against the FULL fixture set, so a
-    # --categories subset is a narrower view of the same fixtures, not a fixture change.
-    states: dict[str, dict[str, Any]] = {}
-    for model in models:
-        results_path = args.output_dir / f"results-{model_filename(model)}.jsonl"
-        # Without --resume the file is opened "w", which discards it. A narrower follow-up run
-        # (--categories, --limit) into the directory of a finished run would silently destroy
-        # that run's records and overwrite its summary with the subset, so refuse instead and
-        # name both ways forward. --overwrite is the way to say "yes, replace it".
+    # Preflight every destructive output before touching fixtures.json. In particular,
+    # --make-fixtures must not replace a finished run's case definitions and then stop on
+    # the results-file guard, leaving old answers paired with new questions.
+    result_paths = {
+        label: args.output_dir / f"results-{safe_label}.jsonl"
+        for label, safe_label in zip(labels, safe_labels)
+    }
+    for label in labels:
+        results_path = result_paths[label]
         if not args.resume and not args.overwrite and results_path.exists():
             recorded = sum(1 for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip())
             if recorded:
@@ -976,8 +1032,34 @@ def main(
                     f"--resume would discard them. Pass --resume to continue that run, --overwrite to "
                     f"replace it, or use a different --output-dir"
                 )
+
+    fixture_path = args.output_dir / "fixtures.json"
+    if args.make_fixtures or not fixture_path.exists():
+        all_fixtures = make_cases()
+        write_fixtures(fixture_path, all_fixtures, profile)
+    else:
+        all_fixtures = load_fixtures(fixture_path, profile)
+    all_case_ids = [case["id"] for case in all_fixtures]
+    if len(set(all_case_ids)) != len(all_case_ids):
+        raise SystemExit("fixtures.json contains duplicate case ids")
+    fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
+    if len(fixtures) != len(all_fixtures):
+        parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
+        if args.categories:
+            parts.append(f"categories={args.categories}")
+        if args.limit:
+            parts.append(f"limit={args.limit}")
+        print(f"{' / '.join(labels)} {' '.join(parts)}", flush=True)
+
+    # Per-model resume state. The guard compares against the FULL fixture set, so a
+    # --categories subset is a narrower view of the same fixtures, not a fixture change.
+    states: dict[str, dict[str, Any]] = {}
+    for label, model in zip(labels, models):
+        results_path = result_paths[label]
         records = resume_records(results_path) if args.resume else []
         seen_ids = {record["id"] for record in records}
+        if len(seen_ids) != len(records):
+            raise SystemExit(f"{results_path.name} contains duplicate case ids; refusing an ambiguous resume")
         unknown = sorted(seen_ids - {case["id"] for case in all_fixtures})
         if unknown:
             raise SystemExit(
@@ -985,22 +1067,30 @@ def main(
                 f"(e.g. {', '.join(unknown[:3])}); the fixtures changed — run without --resume "
                 f"or delete the results file"
             )
-        states[model] = {"path": results_path, "records": records, "seen": frozenset(seen_ids)}
+        states[label] = {
+            "path": results_path,
+            "records": records,
+            "seen": frozenset(seen_ids),
+            "model": model,
+        }
     mode = "a" if args.resume else "w"
     started = time.monotonic()
     with contextlib.ExitStack() as stack:
-        outputs = {model: stack.enter_context(states[model]["path"].open(mode, encoding="utf-8")) for model in models}
+        outputs = {
+            label: stack.enter_context(states[label]["path"].open(mode, encoding="utf-8")) for label in labels
+        }
         if len(models) == 1:
             model = models[0]
-            states[model]["records"] = states[model]["records"] + run_cases(
+            label = labels[0]
+            states[label]["records"] = states[label]["records"] + run_cases(
                 base_urls[0],
                 model,
                 fixtures,
-                outputs[model],
+                outputs[label],
                 timeout=timeout,
                 retry_delay=retry_delay,
                 tolerate_errors=tolerate_errors,
-                skip=states[model]["seen"],
+                skip=states[label]["seen"],
                 send_seed=not args.no_seed,
                 send_reasoning_effort=not args.no_reasoning_effort,
                 concurrency=args.concurrency,
@@ -1020,18 +1110,45 @@ def main(
                 timeout=timeout,
                 retry_delay=retry_delay,
                 tolerate_errors=tolerate_errors,
-                skip_by_model={model: states[model]["seen"] for model in models},
+                skip_by_model={label: states[label]["seen"] for label in labels},
                 send_seed=not args.no_seed,
                 send_reasoning_effort=not args.no_reasoning_effort,
                 api_keys=api_keys,
+                labels=labels,
             )
-            for model in models:
-                states[model]["records"] = states[model]["records"] + new_records[model]
+            for label in labels:
+                states[label]["records"] = states[label]["records"] + new_records[label]
     # The summary covers every record, resumed ones included.
-    for model in models:
-        summary = summarize(states[model]["records"])
-        summary.update({"model": model, "elapsed_seconds": time.monotonic() - started})
-        (args.output_dir / f"summary-{model_filename(model)}.json").write_text(
+    full_fixtures_sha256 = cases_sha256(all_fixtures)
+    for label in labels:
+        model = states[label]["model"]
+        records = states[label]["records"]
+        recorded_ids = {record["id"] for record in records}
+        recorded_cases = [case for case in all_fixtures if case["id"] in recorded_ids]
+        summary = summarize(records)
+        summary.update(
+            {
+                "model": model,
+                "label": label,
+                "elapsed_seconds": time.monotonic() - started,
+                "run_identity": {
+                    "schema_version": 1,
+                    "profile": profile,
+                    "fixtures_sha256": full_fixtures_sha256,
+                    "selection_sha256": cases_sha256(recorded_cases),
+                    "case_ids": [case["id"] for case in recorded_cases],
+                    "request_options": {
+                        "temperature": 0,
+                        "top_p": 1,
+                        "seed": None if args.no_seed else 20260926,
+                        "reasoning_effort": None if args.no_reasoning_effort else "medium",
+                        "concurrency": args.concurrency,
+                        "system_sha256": hashlib.sha256(SYSTEM.encode()).hexdigest(),
+                    },
+                },
+            }
+        )
+        (args.output_dir / f"summary-{model_filename(label)}.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
         )
         print(json.dumps(summary, ensure_ascii=False), flush=True)
