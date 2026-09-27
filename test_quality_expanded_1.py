@@ -95,5 +95,6 @@ if __name__ == "__main__":
         timeout=1800,
         retry_delay=5.0,
         tolerate_errors=True,
+        profile="expanded",
         description="Expanded profile: 266 cases including MMLU and long-context needles; a failed request is recorded.",
     )

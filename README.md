@@ -105,14 +105,21 @@ dead or closed connection is dropped and reconnected on retry.
 
 ```
 runs/2026-09-27/
-  fixtures.json              the pinned cases (version header + cases), reused by later models
+  fixtures.json              the pinned cases (version + profile header + cases), reused by later models
   results-<model>.jsonl      one record per case, full content kept
   summary-<model>.json       accuracy by category, throughput, truncation counts
 ```
 
 Model ids that contain path separators or spaces are flattened to `_` in the
-output file names (`org/model` → `results-org_model.jsonl`). Fixtures carry a small
-`version` header; pre-versioning bare-array `fixtures.json` files are still read.
+output file names (`org/model` → `results-org_model.jsonl`).
+
+Fixtures carry a `version` and a `profile` header, and both are checked on read. A
+`version` newer than the harness understands is refused rather than guessed at, and a
+profile mismatch is refused too: both harnesses cache under the same `fixtures.json`
+name, so give each profile its own `--output-dir` (or pass `--make-fixtures`, which
+rebuilds and discards the other profile's comparison). Pre-versioning bare-array
+`fixtures.json` files are still read, and a file written before the profile header
+existed loads with a warning.
 
 ## Comparison
 
@@ -134,7 +141,7 @@ first), truncation and error counts, and median prefill/decode throughput.
 ## Scoring
 
 Extraction is deliberately defensive, because a benchmark that misreads a correct
-answer is worse than no benchmark. Three failure modes are handled:
+answer is worse than no benchmark. Four failure modes are handled:
 
 **Reasoning leaking into `content`.** Some builds do not split chain-of-thought
 into `reasoning_content` and instead close it inline with a model-specific tag
@@ -148,6 +155,14 @@ the reasoning quotes a snippet of its own answer (`Provide {"seconds":8229}.`)
 before emitting the real one — the slice spans both and parses as nothing. Instead
 the text is scanned for brace-balanced candidates, respecting string literals and
 escapes, and the last one wins.
+
+**Markdown wrapped around the value.** A model that was told to end with `Answer: X`
+often writes `Answer: **A**`, `` Key: `K...` `` or `The answer is **42**.` — the marker
+is there, but the value sits behind emphasis. Every marker-based pattern therefore
+tolerates `*`, `_`, backticks and quotes on either side of the value. For the needle
+cases the colon itself stays mandatory: archive records read `storage label K...;`
+without one, so the colon is what tells the model's own answer line apart from a record
+it merely echoed back.
 
 **Formatting that is not a real difference.** Numbers compare by value, so `6.00`
 matches `6` and `1/2` matches `0.5`. Multiple-choice accepts both letter and digit
@@ -171,6 +186,9 @@ If `wrong_and_truncated` is high, raise `max_tokens` before drawing conclusions
 about the model.
 
 ### Failed requests are not wrong answers
+
+A response that carries no usable choice (`"choices": []`, or a null entry) counts as
+a failed request too, not as an empty answer: there is no completion in it to score.
 
 In `test_quality_expanded_1.py` a request that still fails after retries is
 recorded with `error` instead of aborting the run, and the summary counts it
@@ -197,8 +215,9 @@ their own labels, so old runs stay comparable.
 
 The scoring, extraction, summary, run-loop, HTTP-layer and CLI (fixtures, resume,
 subset selection, payload flags, concurrency, interleave) helpers are covered by
-65 stdlib-only regression tests (no endpoint and no network needed — the request
-layer is mocked):
+81 stdlib-only regression tests (no endpoint and no network needed — the request
+layer is mocked, including the markdown, degenerate-response and fixture-header
+regressions above):
 
 ```bash
 python3 -m unittest discover -v

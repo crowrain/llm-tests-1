@@ -677,5 +677,143 @@ class SharedMainTests(unittest.TestCase):
                     qc.main(lambda: cases, timeout=1, retry_delay=0.01, tolerate_errors=True, description="t")
 
 
+class MarkdownAroundAnswerTests(unittest.TestCase):
+    """Emphasis and backticks between the marker and the value.
+
+    Every case here used to score a *correct* answer as no answer at all, because each
+    marker-based pattern demanded the value sit immediately after the separator. Models
+    that format their output tripped all three extractors.
+    """
+
+    def test_gsm8k_bold_answer_with_trailing_period(self):
+        for text in ("The answer is **42**.", "#### **42**.", "Final: (42).", "Result: \\(42\\)."):
+            with self.subTest(text=text):
+                self.assertEqual(qc.score({"category": "gsm8k", "expected": "42"}, text), (True, "42"))
+
+    def test_gsm8k_punctuation_only_token_never_wins(self):
+        # The bug: "." matched the fallback class and, being last, replaced the real number.
+        self.assertEqual(qc.GSM_PATTERNS[2].findall("The answer is **42**."), ["42"])
+
+    def test_gsm8k_plain_forms_still_score(self):
+        for text, expected in (("#### 42", "42"), ("The answer is $42.", "42"), ("we get 42.", "42")):
+            with self.subTest(text=text):
+                self.assertEqual(qc.score({"category": "gsm8k", "expected": "42"}, text), (True, expected))
+
+    def test_multiple_choice_emphasis(self):
+        for text in ("Answer: **A**", "Answer: **A**.", "Answer: `A`", "Answer: __A__", 'Answer: "A"'):
+            with self.subTest(text=text):
+                self.assertEqual(qc.score({"category": "arc_challenge", "expected": "A"}, text), (True, "A"))
+
+    def test_needle_key_emphasis(self):
+        expected = "K12345678Z"
+        for text in (f"Key: **{expected}**", f"Key: `{expected}`", f"label: **{expected}**."):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    qc.score({"category": "long_context_16k", "expected": expected}, text), (True, expected)
+                )
+
+    def test_needle_still_requires_the_colon(self):
+        """An echoed archive record reads "storage label K...;" with no colon.
+
+        The colon is what tells the model's own answer line apart from a record it copied
+        back, so tolerating emphasis must not tolerate a missing separator.
+        """
+        echoed = "Record 000123: storage label K99999999Z; provenance cedar quartz."
+        self.assertEqual(qc.score({"category": "long_context_16k", "expected": "K12345678Z"}, echoed), (False, None))
+
+
+class NoUsableChoiceTests(unittest.TestCase):
+    """A response that carries no choice is an infrastructure failure, not an empty answer."""
+
+    def case(self):
+        return {"id": "c1", "category": "gsm8k", "prompt": "q", "expected": "42", "max_tokens": 16}
+
+    def process(self, response, *, tolerate_errors=True):
+        with mock.patch.object(qc, "request", return_value=response):
+            return qc._process_case(
+                "http://x", "m", self.case(), timeout=1, retry_delay=0,
+                tolerate_errors=tolerate_errors, send_seed=True, send_reasoning_effort=True,
+            )
+
+    def test_empty_choices_list_is_recorded_not_raised(self):
+        # Used to raise IndexError from outside the try, aborting even a tolerant run.
+        record = self.process({"choices": []})
+        self.assertIsNotNone(record["error"])
+        self.assertFalse(record["correct"])
+
+    def test_missing_and_null_choices_are_recorded(self):
+        for response in ({}, {"choices": None}, {"choices": [None]}, {"choices": "nope"}):
+            with self.subTest(response=response):
+                self.assertIsNotNone(self.process(response)["error"])
+
+    def test_no_usable_choice_aborts_when_intolerated(self):
+        with self.assertRaises(Exception):
+            self.process({"choices": []}, tolerate_errors=False)
+
+    def test_null_message_and_timings_do_not_crash(self):
+        record = self.process({"choices": [{"message": None, "finish_reason": "stop"}], "timings": None})
+        self.assertIsNone(record["error"])
+        self.assertEqual(record["content"], "")
+        self.assertEqual(record["timings"], {})
+
+    def test_summarize_tolerates_null_timings(self):
+        # An older results file being resumed can carry the key explicitly null.
+        records = [{"id": "a", "category": "gsm8k", "correct": True, "timings": None}]
+        self.assertIsNone(qc.summarize(records)["median_decode_tps"])
+
+
+class FixtureHeaderTests(unittest.TestCase):
+    """The version and profile headers are enforced, not merely written."""
+
+    def fixtures(self):
+        return [{"id": "gsm8k_00", "category": "gsm8k", "prompt": "q", "expected": "42", "max_tokens": 16}]
+
+    def write(self, path, **header):
+        path.write_text(json.dumps({**header, "cases": self.fixtures()}))
+
+    def test_profile_is_written_and_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            qc.write_fixtures(path, self.fixtures(), "expanded")
+            self.assertEqual(json.loads(path.read_text())["profile"], "expanded")
+            self.assertEqual(qc.load_fixtures(path, "expanded"), self.fixtures())
+
+    def test_foreign_profile_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            qc.write_fixtures(path, self.fixtures(), "express")
+            with self.assertRaises(SystemExit) as caught:
+                qc.load_fixtures(path, "expanded")
+            self.assertIn("express", str(caught.exception))
+
+    def test_future_version_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            self.write(path, version=qc.FIXTURES_VERSION + 1, profile="expanded")
+            with self.assertRaises(SystemExit):
+                qc.load_fixtures(path, "expanded")
+
+    def test_older_header_without_profile_loads_with_a_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            self.write(path, version=1)
+            with mock.patch("builtins.print") as printed:
+                self.assertEqual(qc.load_fixtures(path, "expanded"), self.fixtures())
+            self.assertIn("no profile header", printed.call_args[0][0])
+
+    def test_expanded_harness_refuses_an_express_fixture_directory(self):
+        """The whole point: reusing the other profile's pinned cases must not be silent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            qc.write_fixtures(out_dir / "fixtures.json", self.fixtures(), "express")
+            argv = ["prog", "--model", "m", "--output-dir", str(out_dir)]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit):
+                    qc.main(
+                        lambda: self.fixtures(), timeout=1, retry_delay=0,
+                        tolerate_errors=True, description="t", profile="expanded",
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -56,5 +56,6 @@ if __name__ == "__main__":
         timeout=900,
         retry_delay=4.0,
         tolerate_errors=False,
+        profile="express",
         description="Express profile: 72 fast cases; a failed request aborts the run.",
     )

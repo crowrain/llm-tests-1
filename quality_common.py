@@ -127,16 +127,27 @@ def get_rows(dataset: str, config: str, split: str, offsets: list[int]) -> list[
 THINK_CLOSE = re.compile(r"</[^<>]*think[^<>]*>", re.I)
 THINK_OPEN = re.compile(r"<[^<>/]*think[^<>]*>", re.I)
 FENCE = re.compile(r"```[a-zA-Z0-9_+-]*[ \t]*\n?|\n?```")
+# Markdown emphasis and backticks routinely wrap the value a model was told to end with
+# ("Answer: **A**", "Key: `K...`"). They carry no meaning here, so every marker-based pattern
+# tolerates them on either side of the value; without that the answer reads as absent.
+EMPHASIS = r"""[\s*_`"']*"""
 # ARC/MMLU answer keys are letters in most rows and digits in some, so accept both. A trailing
 # sentence period is common ("Answer: A.") and must not disqualify the match.
-ANSWER_CHOICE = re.compile(r"(?:answer|option)\s*(?:is\s*)?[:\-]?\s*\(?([A-E]|[1-5])\)?\.?(?!\w)", re.I)
-NEEDLE_KEY = re.compile(r"(?:key|label)\s*:\s*(K\d{8}Z)", re.I)
+ANSWER_CHOICE = re.compile(
+    rf"(?:answer|option)\s*(?:is\s*)?[:\-]?\s*{EMPHASIS}\(?([A-E]|[1-5])\)?{EMPHASIS}\.?(?!\w)", re.I
+)
+# The colon is required on purpose: archive records read "storage label K...;" with no colon,
+# so it is what separates the model's own answer line from a record it merely echoed back.
+NEEDLE_KEY = re.compile(rf"(?:key|label)\s*:\s*{EMPHASIS}(K\d{{8}}Z)", re.I)
 # Tried in order: the requested `#### n` marker, then an explicitly stated answer, then any
 # trailing number. Each fallback is looser, so a marked answer always beats a stray digit.
 GSM_PATTERNS = (
     re.compile(r"####\s*([-+]?[$\d,.]+(?:/\d+)?)"),
     re.compile(r"(?:answer|total)\s*(?:is|:)\s*\$?\s*([-+]?[\d,.]+(?:/\d+)?)", re.I),
-    re.compile(r"(?<![\w.])[-+]?[$\d,.]+(?:/\d+)?(?![\w.])"),
+    # The lookahead forces at least one digit into the match. Without it the character class
+    # also matches a punctuation-only token — the "." closing "**42**." — which, being the
+    # last match, won and discarded the real number, scoring a right answer as no answer.
+    re.compile(r"(?<![\w.])[-+]?(?=[$,.]*\d)[$\d,.]+(?:/\d+)?(?![\w.])"),
 )
 
 
@@ -372,7 +383,9 @@ def model_filename(model: str) -> str:
 
 
 def median_timing(records: list[dict[str, Any]], key: str) -> float | None:
-    values = [r.get("timings", {}).get(key) for r in records]
+    # A get() default only covers a *missing* key: a server (or an older results file being
+    # resumed) may carry "timings" as an explicit null, which the default would let through.
+    values = [r["timings"].get(key) for r in records if isinstance(r.get("timings"), dict)]
     values = [value for value in values if isinstance(value, (int, float)) and value > 0]
     return statistics.median(values) if values else None
 
@@ -448,18 +461,26 @@ def _process_case(
             send_seed=send_seed,
             send_reasoning_effort=send_reasoning_effort,
         )
+        # A response carrying no usable choice holds no answer, so it is a failed request
+        # rather than an empty one: raised here, inside the try, so the mode below decides
+        # (record it or abort). Reaching for [0] after the try crashed even a tolerant run.
+        choices = response.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise RuntimeError(f"response carried no usable choice: {json.dumps(response)[:300]}")
     except Exception as exc:
         if not tolerate_errors:
             raise
         error = repr(exc)
         response = {}
+    # Either the try validated choices[0] as a dict, or it left `response` empty.
     choice = response.get("choices", [{}])[0]
-    message = choice.get("message", {})
+    # `or {}` rather than a get() default: these keys may be present and explicitly null.
+    message = choice.get("message") or {}
     content = message.get("content") or ""
     reasoning_content = message.get("reasoning_content")
     finish_reason = choice.get("finish_reason")
     usage = response.get("usage")
-    timings = response.get("timings", {})
+    timings = response.get("timings") or {}
     if error is None:
         # A request failure must not be scored: there is no answer to misread.
         correct, parsed = score(case, content)
@@ -600,26 +621,58 @@ def run_cases_interleaved(
 
 # --- CLI ------------------------------------------------------------------------
 
-# Bumped if the fixture file layout changes; old runs keep their own files, so pinned
-# cases (and their needle labels) stay comparable.
-FIXTURES_VERSION = 1
+# Bumped if the fixture file layout changes; old runs keep their own files, so pinned cases
+# (and their needle labels) stay comparable. Version 2 added the `profile` header.
+FIXTURES_VERSION = 2
 
 
-def write_fixtures(fixture_path: Path, fixtures: list[dict[str, Any]]) -> None:
-    """Write the pinned cases with a version header, so a stale or foreign cache is visible."""
-    fixture_path.write_text(
-        json.dumps({"version": FIXTURES_VERSION, "cases": fixtures}, ensure_ascii=False, indent=2) + "\n"
-    )
+def write_fixtures(
+    fixture_path: Path, fixtures: list[dict[str, Any]], profile: str | None = None
+) -> None:
+    """Write the pinned cases behind a version and profile header, so a stale or foreign cache
+    is refused on the next read instead of being reused as if it were ours."""
+    header: dict[str, Any] = {"version": FIXTURES_VERSION}
+    if profile:
+        header["profile"] = profile
+    fixture_path.write_text(json.dumps({**header, "cases": fixtures}, ensure_ascii=False, indent=2) + "\n")
 
 
-def load_fixtures(fixture_path: Path) -> list[dict[str, Any]]:
-    """Read pinned cases; pre-versioning files were bare case arrays and still load."""
+def load_fixtures(fixture_path: Path, profile: str | None = None) -> list[dict[str, Any]]:
+    """Read pinned cases, refusing a file this build cannot honestly interpret.
+
+    Both headers are now checked rather than merely written. The version must be one this
+    build knows: a newer file may lay its cases out differently, and reading it anyway would
+    compare the wrong work. The profile must match the harness asking, because both profiles
+    cache under the same `fixtures.json` name — without this check, running the expanded
+    harness in a directory an express run had created silently re-ran the 72 express cases
+    and wrote them out as an expanded result. Pre-versioning files were bare case arrays and
+    still load.
+    """
     data = json.loads(fixture_path.read_text())
     if isinstance(data, list):
         return data
-    if isinstance(data, dict) and isinstance(data.get("cases"), list):
-        return data["cases"]
-    raise ValueError(f"unrecognized fixtures.json format: {fixture_path}")
+    if not isinstance(data, dict) or not isinstance(data.get("cases"), list):
+        raise ValueError(f"unrecognized fixtures.json format: {fixture_path}")
+    version = data.get("version")
+    if version is not None and (not isinstance(version, int) or version > FIXTURES_VERSION):
+        raise SystemExit(
+            f"{fixture_path} declares fixtures version {version!r}, but this build understands "
+            f"at most {FIXTURES_VERSION}; update the harness or use a different --output-dir"
+        )
+    found = data.get("profile")
+    if profile and isinstance(found, str) and found != profile:
+        raise SystemExit(
+            f"{fixture_path} holds {found!r} fixtures but this is the {profile!r} harness; the "
+            f"two profiles pin different cases, so give each profile its own --output-dir (or "
+            f"--make-fixtures to rebuild, discarding the {found!r} comparison)"
+        )
+    if profile and found is None:
+        print(
+            f"warning: {fixture_path.name} carries no profile header (written by an older "
+            f"build); assuming its cases are {profile!r}",
+            flush=True,
+        )
+    return data["cases"]
 
 
 def resume_records(results_path: Path) -> list[dict[str, Any]]:
@@ -685,8 +738,12 @@ def main(
     retry_delay: float,
     tolerate_errors: bool,
     description: str,
+    profile: str | None = None,
 ) -> None:
     """Shared entry point: build or reuse fixtures, run the cases, write results + summary.
+
+    ``profile`` names the calling harness and is stamped into (and checked against)
+    ``fixtures.json``, so one profile cannot reuse the other's pinned cases.
 
     ``--model`` may list several comma-separated model ids (with matching ``--base-url``
     entries) for a strict A/B interleave; a single model is the classic run.
@@ -741,9 +798,9 @@ def main(
     fixture_path = args.output_dir / "fixtures.json"
     if args.make_fixtures or not fixture_path.exists():
         all_fixtures = make_cases()
-        write_fixtures(fixture_path, all_fixtures)
+        write_fixtures(fixture_path, all_fixtures, profile)
     else:
-        all_fixtures = load_fixtures(fixture_path)
+        all_fixtures = load_fixtures(fixture_path, profile)
     fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
     if len(fixtures) != len(all_fixtures):
         parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
