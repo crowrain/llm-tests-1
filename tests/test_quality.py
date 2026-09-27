@@ -303,7 +303,7 @@ class RequestPayloadTests(unittest.TestCase):
     def capture_payload(self, **kwargs):
         captured = {}
 
-        def fake_post(url, data, timeout=None):
+        def fake_post(url, data, timeout=None, api_key=None):
             captured["data"] = data
             return b'{"choices": []}'
 
@@ -892,6 +892,152 @@ class OverwriteGuardTests(unittest.TestCase):
                 tolerate_errors=True, description="t", profile="p",
             )
         self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+
+
+class ApiKeyTests(unittest.TestCase):
+    """Bearer-token auth: sent when given, absent when not, and never echoed anywhere."""
+
+    CASE = {"id": "c1", "category": "arc_challenge", "expected": "A", "prompt": "q", "max_tokens": 32}
+    BASE = "http://127.0.0.1:8080"
+    KEY = "sk-secret-value"
+
+    class FakeConn:
+        headers: list = []
+
+        def __init__(self, host, port, timeout=None):
+            self.sock = None
+
+        def request(self, method, path, body=None, headers=None, timeout=None):
+            ApiKeyTests.FakeConn.headers.append(dict(headers or {}))
+
+        def getresponse(self):
+            return ApiKeyTests.FakeResponse()
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return b'{"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}'
+
+    def setUp(self):
+        self.FakeConn.headers = []
+        qc._LOCAL.conns = {}
+        patcher = mock.patch.object(qc.http.client, "HTTPConnection", self.FakeConn)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_key_is_sent_as_a_bearer_token(self):
+        qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0, api_key=self.KEY)
+        self.assertEqual(self.FakeConn.headers[0]["Authorization"], f"Bearer {self.KEY}")
+
+    def test_no_key_means_no_authorization_header(self):
+        qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0)
+        self.assertNotIn("Authorization", self.FakeConn.headers[0])
+        self.assertEqual(self.FakeConn.headers[0]["Content-Type"], "application/json")
+
+    def test_empty_key_is_treated_as_absent(self):
+        qc.request(self.BASE, "m", self.CASE, timeout=1, retry_delay=0, api_key="")
+        self.assertNotIn("Authorization", self.FakeConn.headers[0])
+
+    def test_run_cases_forwards_the_key(self):
+        with mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}}]}) as fake:
+            qc.run_cases(self.BASE, "m", [dict(self.CASE)], io.StringIO(), api_key=self.KEY)
+        self.assertEqual(fake.call_args.kwargs["api_key"], self.KEY)
+
+    def test_key_never_reaches_the_record(self):
+        """A key in a record would be copied into results-*.jsonl and shared with the run."""
+        with mock.patch.object(qc, "request", return_value={"choices": [{"message": {"content": "Answer: A."}}]}):
+            out = io.StringIO()
+            qc.run_cases(self.BASE, "m", [dict(self.CASE)], out, api_key=self.KEY)
+        self.assertNotIn(self.KEY, out.getvalue())
+
+
+class PerModelFlagTests(unittest.TestCase):
+    """--base-url and --api-key line up with --model the same way."""
+
+    def test_single_entry_is_shared(self):
+        self.assertEqual(qc.per_model("u", ["a", "b"], "--base-url", "URL"), ["u", "u"])
+
+    def test_matching_count_is_kept_in_order(self):
+        self.assertEqual(qc.per_model("u1,u2", ["a", "b"], "--base-url", "URL"), ["u1", "u2"])
+
+    def test_mismatched_count_is_an_error(self):
+        with self.assertRaises(SystemExit):
+            qc.per_model("u1,u2,u3", ["a", "b"], "--base-url", "URL")
+
+    def test_whitespace_is_trimmed(self):
+        self.assertEqual(qc.per_model(" u1 , u2 ", ["a", "b"], "--api-key", "key"), ["u1", "u2"])
+
+
+class ApiKeyCliTests(unittest.TestCase):
+    """The CLI resolves the key from --api-key, then $OPENAI_API_KEY, then not at all."""
+
+    def fixtures(self):
+        return [{"id": "c1", "category": "gsm8k", "prompt": "q", "expected": "1", "max_tokens": 16}]
+
+    def run_main(self, out_dir, *extra, env=None):
+        seen = {}
+
+        def fake_request(base_url, model, case, **kwargs):
+            seen["api_key"] = kwargs.get("api_key")
+            return {"choices": [{"message": {"content": "#### 1"}, "finish_reason": "stop"}]}
+
+        argv = ["prog", "--model", "m", "--output-dir", str(out_dir), *extra]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request), \
+                mock.patch.dict(qc.os.environ, env or {}, clear=False):
+            qc.main(
+                lambda: self.fixtures(), timeout=1, retry_delay=0,
+                tolerate_errors=True, description="t", profile="p",
+            )
+        return seen["api_key"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out_dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(lambda: qc.os.environ.pop("OPENAI_API_KEY", None))
+        qc.os.environ.pop("OPENAI_API_KEY", None)
+
+    def test_flag_wins(self):
+        key = self.run_main(self.out_dir, "--api-key", "sk-flag", env={"OPENAI_API_KEY": "sk-env"})
+        self.assertEqual(key, "sk-flag")
+
+    def test_environment_is_the_fallback(self):
+        self.assertEqual(self.run_main(self.out_dir, env={"OPENAI_API_KEY": "sk-env"}), "sk-env")
+
+    def test_no_key_configured_sends_none(self):
+        self.assertIsNone(self.run_main(self.out_dir))
+
+    def test_empty_environment_value_sends_none(self):
+        self.assertIsNone(self.run_main(self.out_dir, env={"OPENAI_API_KEY": "   "}))
+
+    def test_key_count_must_match_the_model_count(self):
+        argv = ["prog", "--model", "a,b", "--output-dir", str(self.out_dir), "--api-key", "k1,k2,k3"]
+        with mock.patch.object(sys, "argv", argv):
+            with self.assertRaises(SystemExit):
+                qc.main(
+                    lambda: self.fixtures(), timeout=1, retry_delay=0,
+                    tolerate_errors=True, description="t", profile="p",
+                )
+
+    def test_interleave_gives_each_model_its_own_key(self):
+        qc.write_fixtures(self.out_dir / "fixtures.json", self.fixtures(), "p")
+        seen = {}
+
+        def fake_request(base_url, model, case, **kwargs):
+            seen[model] = kwargs.get("api_key")
+            return {"choices": [{"message": {"content": "#### 1"}, "finish_reason": "stop"}]}
+
+        argv = [
+            "prog", "--model", "a,b", "--base-url", "http://a,http://b",
+            "--output-dir", str(self.out_dir), "--api-key", "k-a,k-b",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request):
+            qc.main(
+                lambda: self.fixtures(), timeout=1, retry_delay=0,
+                tolerate_errors=True, description="t", profile="p",
+            )
+        self.assertEqual(seen, {"a": "k-a", "b": "k-b"})
 
 
 if __name__ == "__main__":

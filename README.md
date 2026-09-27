@@ -41,7 +41,9 @@ and failure tolerance.
 - Network access to `datasets-server.huggingface.co` to build fixtures the first
   time. After that `fixtures.json` is reused and the run is offline apart from the
   endpoint itself.
-- An endpoint serving `/v1/chat/completions`.
+- An endpoint serving `/v1/chat/completions`. If it requires a bearer token (vLLM
+  started with `--api-key`, a hosted provider, a proxy in front of llama.cpp), set
+  `$OPENAI_API_KEY` or pass `--api-key`.
 
 ## Usage
 
@@ -67,6 +69,10 @@ python3 test_quality_expanded_1.py --model my-model-b --output-dir runs/2026-09-
 # strict A/B interleave: both models answer every case, one request at a time
 python3 test_quality_express_1.py --model my-model-a,my-model-b \
   --base-url http://127.0.0.1:8080,http://127.0.0.1:8081 --output-dir runs/2026-09-27
+
+# an endpoint that wants a bearer token
+OPENAI_API_KEY=sk-... python3 test_quality_express_1.py \
+  --model my-model-a --output-dir runs/2026-09-27 --base-url https://endpoint.example
 ```
 
 `test_quality_expanded_1.py` takes the same flags. Flag reference:
@@ -75,6 +81,7 @@ python3 test_quality_express_1.py --model my-model-a,my-model-b \
 |---|---|
 | `--model` | model id (required). Comma-separated ids switch the run to a strict A/B interleave. |
 | `--base-url` | endpoint, default `http://127.0.0.1:8080`. Comma-separated entries must match the `--model` count, or a single URL is shared by all models. |
+| `--api-key` | bearer token for endpoints that require one. Defaults to `$OPENAI_API_KEY`. Follows the same comma-separated rule as `--base-url`, so each side of an interleave can carry its own key. |
 | `--output-dir` | directory for `fixtures.json`, `results-<model>.jsonl`, `summary-<model>.json` (created if missing). |
 | `--make-fixtures` | force a rebuild of `fixtures.json`. Cannot be combined with `--resume`. |
 | `--resume` | skip cases already recorded in `results-<model>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
@@ -93,6 +100,14 @@ answers span the same time window, so machine drift (heat, cache) cannot
 systematically favour one side, and no run distorts the other's throughput. Each
 model gets its own results/summary files; `--resume` works per model.
 `--concurrency` is rejected with multiple models by design.
+
+### Authentication
+
+An endpoint that wants a bearer token gets one from `$OPENAI_API_KEY`, or from `--api-key`
+if it is given (the flag wins). Prefer the environment variable: a command line is visible
+to other users through `ps`. The key is sent as `Authorization: Bearer <key>` and goes
+nowhere else — not into the progress log, `results-<model>.jsonl` or `summary-<model>.json`.
+Keys themselves must not contain a comma, since that is how per-model entries are split.
 
 ### Request payload
 

@@ -13,6 +13,7 @@ import argparse
 import contextlib
 import http.client
 import json
+import os
 import re
 import statistics
 import threading
@@ -294,11 +295,14 @@ def _connections() -> dict[tuple, "http.client.HTTPConnection"]:
     return _LOCAL.conns
 
 
-def _post_json(url: str, data: bytes, *, timeout: float) -> bytes:
+def _post_json(url: str, data: bytes, *, timeout: float, api_key: str | None = None) -> bytes:
     """POST ``data`` to ``url`` and return the response body, reusing the keep-alive
     connection for (scheme, host, port). A failed exchange drops the connection so the
     caller's next attempt reconnects. HTTP errors (status >= 400) are raised, not
-    returned: the body is not a completion."""
+    returned: the body is not a completion.
+
+    ``api_key`` is sent as a bearer token. It is never written to a record, a summary or a
+    log line: only the URL and the response body appear in the error raised below."""
     parts = urllib.parse.urlsplit(url)
     key = (parts.scheme, parts.hostname, parts.port)
     path = parts.path or "/"
@@ -317,8 +321,11 @@ def _post_json(url: str, data: bytes, *, timeout: float) -> bytes:
         conn.timeout = timeout
     else:
         conn.sock.settimeout(timeout)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        conn.request("POST", path, body=data, headers={"Content-Type": "application/json"})
+        conn.request("POST", path, body=data, headers=headers)
         response = conn.getresponse()
         body = response.read()
     except Exception:
@@ -339,13 +346,16 @@ def request(
     retry_delay: float = 5.0,
     send_seed: bool = True,
     send_reasoning_effort: bool = True,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """POST one case to /v1/chat/completions, retrying on any failure.
 
     ``timeout`` bounds each attempt in seconds; ``retry_delay`` is multiplied by the
     attempt number (1, 2) before sleeping. ``send_seed`` / ``send_reasoning_effort``
     gate the optional sampler fields for servers that reject unknown payload keys
-    (some llama.cpp / vLLM builds answer 400 to them).
+    (some llama.cpp / vLLM builds answer 400 to them). ``api_key`` authenticates the
+    request as a bearer token, for endpoints that require one (vLLM started with
+    ``--api-key``, a hosted provider, a proxy in front of llama.cpp).
     """
     payload = {
         "model": model,
@@ -365,7 +375,11 @@ def request(
     error: Exception | None = None
     for attempt in range(3):
         try:
-            return json.loads(_post_json(f"{base_url.rstrip('/')}/v1/chat/completions", data, timeout=timeout))
+            return json.loads(
+                _post_json(
+                    f"{base_url.rstrip('/')}/v1/chat/completions", data, timeout=timeout, api_key=api_key
+                )
+            )
         except Exception as exc:
             error = exc
             if attempt == 2:
@@ -439,6 +453,7 @@ def _process_case(
     tolerate_errors: bool,
     send_seed: bool,
     send_reasoning_effort: bool,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """Request one case and score the answer. Pure worker: no file I/O, safe to run in
     threads. Returns the record for the case."""
@@ -460,6 +475,7 @@ def _process_case(
             retry_delay=retry_delay,
             send_seed=send_seed,
             send_reasoning_effort=send_reasoning_effort,
+            api_key=api_key,
         )
         # A response carrying no usable choice holds no answer, so it is a failed request
         # rather than an empty one: raised here, inside the try, so the mode below decides
@@ -531,6 +547,7 @@ def run_cases(
     send_seed: bool = True,
     send_reasoning_effort: bool = True,
     concurrency: int = 1,
+    api_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
     case to ``output``. Returns the records of the cases actually sent.
@@ -555,6 +572,7 @@ def run_cases(
         tolerate_errors=tolerate_errors,
         send_seed=send_seed,
         send_reasoning_effort=send_reasoning_effort,
+        api_key=api_key,
     )
     if concurrency <= 1:
         for case in pending:
@@ -588,6 +606,7 @@ def run_cases_interleaved(
     skip_by_model: dict[str, frozenset[str]],
     send_seed: bool = True,
     send_reasoning_effort: bool = True,
+    api_keys: list[str | None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Strict A/B interleave: for every case, ask each model in turn, one request in
     flight at a time. Each model's answers thus span the same time window, so machine
@@ -599,9 +618,10 @@ def run_cases_interleaved(
     for model in models:
         if skip_by_model[model]:
             print(f"{model} resuming: {len(skip_by_model[model])} of {len(cases)} cases already recorded, skipping them", flush=True)
+    keys = api_keys if api_keys is not None else [None] * len(models)
     started = time.monotonic()
     for case in cases:
-        for model, base_url in zip(models, base_urls):
+        for model, base_url, api_key in zip(models, base_urls, keys):
             if case["id"] in skip_by_model[model]:
                 continue
             record = _process_case(
@@ -613,6 +633,7 @@ def run_cases_interleaved(
                 tolerate_errors=tolerate_errors,
                 send_seed=send_seed,
                 send_reasoning_effort=send_reasoning_effort,
+                api_key=api_key,
             )
             _emit(outputs[model], model, len(records_by_model[model]) + 1, len(pending_by_model[model]), case, record, started)
             records_by_model[model].append(record)
@@ -731,6 +752,21 @@ def select_cases(
     return selected
 
 
+def per_model(value: str, models: list[str], flag: str, what: str) -> list[str]:
+    """Split a comma-separated flag into one entry per model; a single entry is shared by all.
+
+    Used for --base-url and --api-key, which must line up with --model in interleave mode.
+    """
+    entries = [item.strip() for item in value.split(",") if item.strip()]
+    if len(entries) == 1 and len(models) > 1:
+        entries = entries * len(models)
+    if len(entries) != len(models):
+        raise SystemExit(
+            f"comma-separated {flag} entries must match the --model count (or be a single shared {what})"
+        )
+    return entries
+
+
 def main(
     make_cases: Callable[[], list[dict[str, Any]]],
     *,
@@ -757,6 +793,15 @@ def main(
         "--resume",
         action="store_true",
         help="skip cases already recorded in results-<model>.jsonl and append to that file",
+    )
+    parser.add_argument(
+        "--api-key",
+        help=(
+            "bearer token for endpoints that require one (vLLM --api-key, a hosted provider, a "
+            "proxy in front of llama.cpp). Defaults to $OPENAI_API_KEY. Comma-separated entries "
+            "must match the --model count, or one key is shared by all. Prefer the environment "
+            "variable: a command line is visible to other users via ps"
+        ),
     )
     parser.add_argument(
         "--overwrite",
@@ -794,11 +839,12 @@ def main(
     models = [model.strip() for model in args.model.split(",") if model.strip()]
     if not models:
         raise SystemExit("--model is empty")
-    base_urls = [url.strip() for url in args.base_url.split(",") if url.strip()]
-    if len(base_urls) == 1 and len(models) > 1:
-        base_urls = base_urls * len(models)
-    if len(base_urls) != len(models):
-        raise SystemExit("comma-separated --base-url entries must match the --model count (or be a single shared URL)")
+    base_urls = per_model(args.base_url, models, "--base-url", "URL")
+    # The key is never echoed: not into the log, the records or the summary.
+    raw_key = args.api_key if args.api_key is not None else os.environ.get("OPENAI_API_KEY", "")
+    api_keys: list[str | None] = (
+        list(per_model(raw_key, models, "--api-key", "key")) if raw_key.strip() else [None] * len(models)
+    )
     if len(models) > 1 and args.concurrency > 1:
         raise SystemExit("--concurrency is not supported with multiple models: the interleave is sequential by design")
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -862,6 +908,7 @@ def main(
                 send_seed=not args.no_seed,
                 send_reasoning_effort=not args.no_reasoning_effort,
                 concurrency=args.concurrency,
+                api_key=api_keys[0],
             )
         else:
             print(f"interleaving {len(models)} models: each case goes to every model in turn, one request at a time", flush=True)
@@ -876,6 +923,7 @@ def main(
                 skip_by_model={model: states[model]["seen"] for model in models},
                 send_seed=not args.no_seed,
                 send_reasoning_effort=not args.no_reasoning_effort,
+                api_keys=api_keys,
             )
             for model in models:
                 states[model]["records"] = states[model]["records"] + new_records[model]
