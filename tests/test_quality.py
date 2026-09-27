@@ -815,5 +815,84 @@ class FixtureHeaderTests(unittest.TestCase):
                     )
 
 
+class OverwriteGuardTests(unittest.TestCase):
+    """A run that would discard recorded cases has to say so first.
+
+    Without --resume the results file is opened "w". A narrower follow-up run into the
+    directory of a finished run -- "let me just re-check the long-context cases" -- used to
+    truncate that run's records and overwrite its summary with the subset, silently.
+    """
+
+    def fixtures(self):
+        return [
+            {"id": "c1", "category": "gsm8k", "prompt": "q", "expected": "1", "max_tokens": 16},
+            {"id": "c2", "category": "long_context_16k", "prompt": "q", "expected": "K1", "max_tokens": 16},
+        ]
+
+    def answer(self, *args, **kwargs):
+        return {"choices": [{"message": {"content": "#### 1"}, "finish_reason": "stop"}], "timings": {}}
+
+    def run_main(self, out_dir, *extra):
+        argv = ["prog", "--model", "m", "--output-dir", str(out_dir), *extra]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=self.answer):
+            qc.main(
+                lambda: self.fixtures(), timeout=1, retry_delay=0,
+                tolerate_errors=True, description="t", profile="p",
+            )
+
+    def recorded(self, out_dir):
+        text = (out_dir / "results-m.jsonl").read_text()
+        return [json.loads(line)["id"] for line in text.splitlines() if line.strip()]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out_dir = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        qc.write_fixtures(self.out_dir / "fixtures.json", self.fixtures(), "p")
+
+    def test_fresh_run_is_unaffected(self):
+        self.run_main(self.out_dir)
+        self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+
+    def test_subset_rerun_is_refused_and_records_survive(self):
+        self.run_main(self.out_dir)
+        with self.assertRaises(SystemExit) as caught:
+            self.run_main(self.out_dir, "--categories", "long_context")
+        self.assertIn("--resume", str(caught.exception))
+        self.assertIn("--overwrite", str(caught.exception))
+        # The point of the guard: nothing was lost.
+        self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+        self.assertEqual(json.loads((self.out_dir / "summary-m.json").read_text())["total"], 2)
+
+    def test_overwrite_replaces_deliberately(self):
+        self.run_main(self.out_dir)
+        self.run_main(self.out_dir, "--categories", "long_context", "--overwrite")
+        self.assertEqual(self.recorded(self.out_dir), ["c2"])
+
+    def test_resume_still_appends(self):
+        self.run_main(self.out_dir, "--categories", "gsm8k")
+        self.run_main(self.out_dir, "--resume")
+        self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+
+    def test_resume_and_overwrite_are_rejected_together(self):
+        with self.assertRaises(SystemExit):
+            self.run_main(self.out_dir, "--resume", "--overwrite")
+
+    def test_an_empty_results_file_does_not_block(self):
+        (self.out_dir / "results-m.jsonl").write_text("\n")
+        self.run_main(self.out_dir)
+        self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+
+    def test_guard_is_per_model(self):
+        self.run_main(self.out_dir)
+        argv = ["prog", "--model", "other", "--output-dir", str(self.out_dir)]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=self.answer):
+            qc.main(
+                lambda: self.fixtures(), timeout=1, retry_delay=0,
+                tolerate_errors=True, description="t", profile="p",
+            )
+        self.assertEqual(self.recorded(self.out_dir), ["c1", "c2"])
+
+
 if __name__ == "__main__":
     unittest.main()

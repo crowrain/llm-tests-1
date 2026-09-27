@@ -78,6 +78,7 @@ python3 test_quality_express_1.py --model my-model-a,my-model-b \
 | `--output-dir` | directory for `fixtures.json`, `results-<model>.jsonl`, `summary-<model>.json` (created if missing). |
 | `--make-fixtures` | force a rebuild of `fixtures.json`. Cannot be combined with `--resume`. |
 | `--resume` | skip cases already recorded in `results-<model>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
+| `--overwrite` | replace an existing `results-<model>.jsonl` instead of refusing to run. Without it, a run that would discard recorded cases stops and names both ways forward. |
 | `--categories` | run a subset by category — exact names or prefixes, comma-separated (`long_context` selects all four needle archives). A token matching nothing is an error, so a typo cannot silently run an empty subset. |
 | `--limit N` | cap the run to the first N selected cases (fixture order). Combines with `--resume`: already-recorded cases stay skipped. |
 | `--concurrency N` | send N cases in parallel (single model only, default 1). Per-case wall-clock then overlaps, so elapsed medians become load numbers rather than latencies — the run prints a note. Each worker thread keeps its own keep-alive connection; the endpoint should handle concurrent connections (standard for inference servers). |
@@ -109,6 +110,12 @@ runs/2026-09-27/
   results-<model>.jsonl      one record per case, full content kept
   summary-<model>.json       accuracy by category, throughput, truncation counts
 ```
+
+A run never discards recorded cases by accident. `results-<model>.jsonl` is replaced only
+on a fresh run or with `--overwrite`; otherwise the harness refuses and points at `--resume`.
+That matters for the obvious follow-up — "let me just re-check the long-context cases" with
+`--categories long_context` — which would otherwise truncate a finished run's records and
+overwrite its summary with the subset.
 
 Model ids that contain path separators or spaces are flattened to `_` in the
 output file names (`org/model` → `results-org_model.jsonl`).

@@ -759,6 +759,11 @@ def main(
         help="skip cases already recorded in results-<model>.jsonl and append to that file",
     )
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="discard an existing results file for this model instead of refusing to run",
+    )
+    parser.add_argument(
         "--categories",
         help="comma-separated fixture categories (exact name or prefix) to run, e.g. 'long_context,mmlu'",
     )
@@ -782,6 +787,8 @@ def main(
     args = parser.parse_args()
     if args.resume and args.make_fixtures:
         raise SystemExit("--resume cannot be combined with --make-fixtures")
+    if args.resume and args.overwrite:
+        raise SystemExit("--resume and --overwrite are opposites: one continues a run, the other replaces it")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be at least 1")
     models = [model.strip() for model in args.model.split(",") if model.strip()]
@@ -815,6 +822,18 @@ def main(
     states: dict[str, dict[str, Any]] = {}
     for model in models:
         results_path = args.output_dir / f"results-{model_filename(model)}.jsonl"
+        # Without --resume the file is opened "w", which discards it. A narrower follow-up run
+        # (--categories, --limit) into the directory of a finished run would silently destroy
+        # that run's records and overwrite its summary with the subset, so refuse instead and
+        # name both ways forward. --overwrite is the way to say "yes, replace it".
+        if not args.resume and not args.overwrite and results_path.exists():
+            recorded = sum(1 for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip())
+            if recorded:
+                raise SystemExit(
+                    f"{results_path.name} already holds {recorded} recorded case(s); running without "
+                    f"--resume would discard them. Pass --resume to continue that run, --overwrite to "
+                    f"replace it, or use a different --output-dir"
+                )
         records = resume_records(results_path) if args.resume else []
         seen_ids = {record["id"] for record in records}
         unknown = sorted(seen_ids - {case["id"] for case in all_fixtures})
