@@ -572,6 +572,31 @@ class InterleaveTests(unittest.TestCase):
                 labels=["same", "same"],
             )
 
+    def interleave(self, base_urls, api_keys=None):
+        calls: list = []
+        outputs = {model: io.StringIO() for model in self.MODELS}
+        with mock.patch.object(qc, "request", side_effect=partial(self.fake_request, calls)):
+            qc.run_cases_interleaved(
+                base_urls, self.MODELS, self.CASES, outputs,
+                timeout=1, retry_delay=0.01, tolerate_errors=True,
+                skip_by_model={model: frozenset() for model in self.MODELS},
+                api_keys=api_keys,
+            )
+        return calls
+
+    def test_short_base_urls_are_rejected_not_truncated(self):
+        # zip() would stop at the one URL and silently drop model-b from the run.
+        with self.assertRaisesRegex(ValueError, "base_urls and models"):
+            self.interleave(["http://a"])
+
+    def test_short_api_keys_are_rejected_not_truncated(self):
+        with self.assertRaisesRegex(ValueError, "api_keys and models"):
+            self.interleave(self.URLS, api_keys=["only-one"])
+
+    def test_matching_lists_run_every_model(self):
+        calls = self.interleave(self.URLS, api_keys=[None, "k"])
+        self.assertEqual({model for model, _ in calls}, {"model-a", "model-b"})
+
 
 class SelectCasesTests(unittest.TestCase):
     def cases(self):
@@ -768,6 +793,32 @@ class SharedMainTests(unittest.TestCase):
                 self.assertEqual(summary["model"], model)
                 self.assertEqual(summary["total"], 2)
                 self.assertEqual(summary["correct"], 2)
+
+    def test_single_model_progress_lines_show_the_label(self):
+        """With --label the log names the deployment, as the interleave already did."""
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = [
+                "prog", "--model", "real-model-id", "--label", "engine-a",
+                "--output-dir", str(tmp), "--categories", "arc_challenge",
+            ]
+            answer = {"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}
+            printed = io.StringIO()
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", return_value=answer), \
+                    mock.patch("sys.stdout", printed):
+                qc.main(
+                    lambda: self.fixtures(), timeout=1, retry_delay=0,
+                    tolerate_errors=True, description="t",
+                )
+            progress = [line for line in printed.getvalue().splitlines() if " 1/2 " in line]
+            self.assertTrue(progress and progress[0].startswith("engine-a "), progress)
+
+    def test_single_model_progress_lines_fall_back_to_the_model_id(self):
+        record = {"choices": [{"message": {"content": "Answer: A."}, "finish_reason": "stop"}]}
+        cases = [{"id": "c1", "category": "arc_challenge", "expected": "A", "max_tokens": 32}]
+        printed = io.StringIO()
+        with mock.patch.object(qc, "request", return_value=record), mock.patch("sys.stdout", printed):
+            qc.run_cases("http://x", "real-model-id", cases, io.StringIO())
+        self.assertTrue(printed.getvalue().startswith("real-model-id 1/1 "))
 
     def test_labels_allow_same_model_id_on_two_deployments(self):
         with tempfile.TemporaryDirectory() as tmp:

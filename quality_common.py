@@ -638,9 +638,14 @@ def run_cases(
     send_reasoning_effort: bool = True,
     concurrency: int = 1,
     api_key: str | None = None,
+    label: str | None = None,
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
     case to ``output``. Returns the records of the cases actually sent.
+
+    ``label`` names the deployment in progress lines (the model id is still what gets
+    requested), matching the interleave, so two runs of one model id on two deployments
+    stay distinguishable in their logs.
 
     With ``tolerate_errors`` a request that fails after retries is recorded with ``error``
     and the run continues; otherwise the first such failure aborts the run. Cases whose id
@@ -649,12 +654,13 @@ def run_cases(
     records stream in completion order; per-case wall-clock (elapsed_seconds) then
     overlaps, so the run measures throughput under load, not per-case latency.
     """
+    name = label or model
     pending = [case for case in cases if case["id"] not in skip]
     if skip:
-        print(f"{model} resuming: {len(skip)} of {len(cases)} cases already recorded, skipping them", flush=True)
+        print(f"{name} resuming: {len(skip)} of {len(cases)} cases already recorded, skipping them", flush=True)
     if concurrency > 1:
         print(
-            f"{model} concurrency={concurrency}: requests overlap, per-case elapsed_seconds "
+            f"{name} concurrency={concurrency}: requests overlap, per-case elapsed_seconds "
             f"is a load number, not a latency",
             flush=True,
         )
@@ -671,7 +677,7 @@ def run_cases(
     if concurrency <= 1:
         for case in pending:
             record = _process_case(base_url, model, case, **worker_kwargs)
-            _emit(output, model, len(records) + 1, len(pending), case, record, started)
+            _emit(output, name, len(records) + 1, len(pending), case, record, started)
             records.append(record)
     else:
         pool = ThreadPoolExecutor(max_workers=concurrency)
@@ -680,7 +686,7 @@ def run_cases(
             for future in as_completed(futures):
                 case = futures[future]
                 record = future.result()  # propagates worker exceptions (abort mode)
-                _emit(output, model, len(records) + 1, len(pending), case, record, started)
+                _emit(output, name, len(records) + 1, len(pending), case, record, started)
                 records.append(record)
         finally:
             # Do not wait for in-flight requests on the way out (abort mode would hang).
@@ -713,6 +719,12 @@ def run_cases_interleaved(
         raise ValueError("labels and models must have the same length")
     if len(set(run_labels)) != len(run_labels):
         raise ValueError("labels must be unique")
+    # zip() below stops at the shortest list, so a short one would silently drop models
+    # from the run and leave their results files empty.
+    if len(base_urls) != len(models):
+        raise ValueError("base_urls and models must have the same length")
+    if api_keys is not None and len(api_keys) != len(models):
+        raise ValueError("api_keys and models must have the same length")
     records_by_model: dict[str, list[dict[str, Any]]] = {label: [] for label in run_labels}
     pending_by_model = {
         label: [case for case in cases if case["id"] not in skip_by_model[label]] for label in run_labels
@@ -1095,6 +1107,7 @@ def main(
                 send_reasoning_effort=not args.no_reasoning_effort,
                 concurrency=args.concurrency,
                 api_key=api_keys[0],
+                label=label,
             )
         else:
             print(
