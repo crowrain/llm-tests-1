@@ -11,6 +11,8 @@ deployment answers better and how fast?** Cases are pinned by dataset offset, th
 sampler is greedy with a fixed seed, and fixtures are cached to disk, so two runs
 compare the same work.
 
+See the [benchmark results](RESULTS.md) for tested models, hardware, accuracy and speed.
+
 ## The two harnesses
 
 | | `test_quality_express_1.py` | `test_quality_expanded_1.py` |
@@ -182,8 +184,10 @@ intentional.
 
 ## Published benchmark results
 
-The [Qwen3.8 27B expanded-profile comparison](runs/2026-09-27-qwen38-expanded/README.md)
-contains aggregate results for Q8_0 and NVFP4 deployments, plus machine-readable summaries.
+The [results page](RESULTS.md) collects expanded-profile runs in one table, with hardware,
+quantization, category scores and links to machine-readable summaries. The earlier
+[Qwen3.8 comparison](runs/2026-09-27-qwen38-expanded/README.md) has more detail on
+those deployments.
 
 ## Scoring
 
