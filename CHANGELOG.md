@@ -11,19 +11,26 @@ can be checked out and diffed.
 ### Integrity and safety fixes
 
 - Fixture replacement now runs only after the existing-results preflight, so a rejected
-  `--make-fixtures` invocation cannot leave old answers paired with new questions.
+  `--make-fixtures` invocation cannot leave old answers paired with new questions (`ed1e3fc`).
 - Real harness profiles refuse legacy fixture files without a profile identity instead of
-  guessing whether they contain express or expanded cases.
+  guessing whether they contain express or expanded cases (`ed1e3fc`).
 - `--label` separates deployment identity from model id. It permits A/B tests of two servers
-  exposing the same model and rejects filename collisions before any output is opened.
+  exposing the same model and rejects filename collisions before any output is opened (`ed1e3fc`).
 - Empty per-endpoint API-key positions are preserved (`--api-key ',secret'`), preventing a
-  key intended for one endpoint from being replicated to another.
+  key intended for one endpoint from being replicated to another (`ed1e3fc`).
 - Summaries now carry identities for the full fixtures, actual recorded selection, system
   prompt, sampler flags and concurrency. `compare_quality.py` refuses incompatible
   comparisons unless `--allow-incompatible` is explicit, and quality deltas exclude
-  transport failures while request accuracy remains visible separately.
+  transport failures while request accuracy remains visible separately (`ed1e3fc`).
 - Completion response validation now covers the response object, message and content types;
-  malformed successful HTTP responses are recorded as infrastructure errors in tolerant mode.
+  malformed successful HTTP responses are recorded as infrastructure errors in tolerant mode
+  (`ed1e3fc`).
+- `run_cases_interleaved` rejects `base_urls` or `api_keys` shorter than `models`, as it
+  already did for labels. `zip()` stopped at the shortest list, so one URL for two models
+  silently dropped the second from the run and left its results file empty (`deab719`).
+- A single-model run with `--label` names the deployment in its progress lines, as the
+  interleave already did; it used to print the model id, so two deployments of one model
+  id produced indistinguishable logs (`deab719`).
 
 ## 2026-09-27
 
@@ -154,14 +161,17 @@ can be checked out and diffed.
 
 ### Tests
 
-- 111 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
+- 132 offline, stdlib-only `unittest` cases (grown from 20 in `2fcd776`):
   scoring, extraction, summarization, filenames, the run loop and CLI
   integration with a mocked request layer, resume, subset selection,
   payload flags, keep-alive connection reuse and error handling,
   concurrency, and strict interleave. The last 16 cover the four bugs above
-  (a630873): markdown-wrapped answers per category, the forms that must still
+  (`a630873`): markdown-wrapped answers per category, the forms that must still
   score wrong so the looser patterns cannot mask a bad answer, degenerate
   and null-bearing responses, and the fixture version/profile headers. Thirty
   more (`155bcb3`, `b36f4a7`, `dcd0978`) cover the overwrite guard, bearer-token
   auth end to end including that the key never reaches a record, and the shared
-  prompt builders including that both profiles ask the same question.
+  prompt builders including that both profiles ask the same question. Sixteen
+  (`ed1e3fc`) cover run identity and compatibility checks, labels, empty key positions,
+  preflight ordering and response validation; five (`deab719`) cover interleave list
+  lengths and label-named progress lines.

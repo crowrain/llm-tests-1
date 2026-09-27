@@ -257,7 +257,7 @@ their own labels, so old runs stay comparable.
 
 The scoring, extraction, summary, run-loop, HTTP-layer and CLI (fixtures, resume,
 subset selection, payload flags, concurrency, interleave) helpers are covered by
-stdlib-only regression tests (no endpoint and no network needed — the request
+132 stdlib-only regression tests (no endpoint and no network needed — the request
 layer is mocked, including the markdown, degenerate-response and fixture-header
 regressions above):
 
