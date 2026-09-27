@@ -29,10 +29,11 @@ Use **express** for a quick read between two candidates, **expanded** when the
 answer matters: it adds knowledge (MMLU) and long context, and it records an
 error instead of aborting the run.
 
-Both entry points are thin: dataset fetching, answer extraction, scoring, the HTTP
-layer, the run loop and summary reporting live in `quality_common.py`, so the two
-harnesses cannot drift apart. They differ only in case selection, request budget
-and failure tolerance.
+Both entry points are thin: dataset fetching, the prompt wording, answer extraction,
+scoring, the HTTP layer, the run loop and summary reporting live in `quality_common.py`,
+so the two harnesses cannot drift apart. They differ only in case selection, request
+budget and failure tolerance — asked the same question, both profiles produce the same
+prompt, which a test asserts.
 
 ## Requirements
 

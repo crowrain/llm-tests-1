@@ -1040,5 +1040,76 @@ class ApiKeyCliTests(unittest.TestCase):
         self.assertEqual(seen, {"a": "k-a", "b": "k-b"})
 
 
+class SharedCaseBuilderTests(unittest.TestCase):
+    """The wording of a question is one fact, shared by both profiles.
+
+    It used to be copy-pasted into each entry point, so editing one copy would move that
+    profile's cases and leave the other's alone: the two harnesses would stop being
+    comparable while every test still passed.
+    """
+
+    GSM_ROW = {"question": "Janet has 3 apples and buys 4 more. How many?", "answer": "3+4=7\n#### 7"}
+    ARC_ROW = {
+        "question": "Which planet is largest?",
+        "choices": {"label": ["A", "B", "C", "D"], "text": ["Mars", "Jupiter", "Venus", "Earth"]},
+        "answerKey": "b",
+    }
+    MMLU_ROW = {"question": "What is 2+2?", "choices": ["3", "4", "5", "6"], "answer": 1}
+
+    def fake_rows(self, dataset, config, split, offsets):
+        row = self.GSM_ROW if "gsm8k" in dataset else self.ARC_ROW if "ai2_arc" in dataset else self.MMLU_ROW
+        return [dict(row) for _ in offsets]
+
+    def build(self):
+        import test_quality_expanded_1 as expanded
+        import test_quality_express_1 as express
+
+        with mock.patch.object(qc, "get_rows", side_effect=self.fake_rows):
+            return express.make_cases(), expanded.make_cases()
+
+    def test_gsm8k_prompt_wording(self):
+        self.assertEqual(qc.gsm8k_prompt("2+2?"), "2+2?\n\nEnd the final answer with `#### <number>`.")
+
+    def test_gsm8k_expected_takes_the_marker_tail(self):
+        self.assertEqual(qc.gsm8k_expected("a=1\nb=2\n#### 18"), "18")
+        self.assertEqual(qc.gsm8k_expected("#### 1,000"), "1,000")
+
+    def test_choice_prompt_renders_one_option_per_line(self):
+        self.assertEqual(
+            qc.choice_prompt("Which?", ["A", "B"], ["x", "y"]),
+            "Which?\n\nA. x\nB. y\n\nChoose one option. End with `Answer: X`.",
+        )
+
+    def test_letter_labels_for_bare_choice_lists(self):
+        self.assertEqual(qc.letter_labels(4), ["A", "B", "C", "D"])
+
+    def test_the_instruction_suffixes_match_what_the_scorers_look_for(self):
+        # The prompt asks for `#### n` and `Answer: X`; the scorer must accept exactly that.
+        self.assertTrue(qc.score({"category": "gsm8k", "expected": "7"}, "#### 7")[0])
+        self.assertTrue(qc.score({"category": "arc_challenge", "expected": "B"}, "Answer: B")[0])
+        self.assertIn("#### <number>", qc.GSM8K_INSTRUCTION)
+        self.assertIn("Answer: X", qc.CHOICE_INSTRUCTION)
+
+    def test_both_profiles_ask_the_same_question_for_the_same_row(self):
+        express_cases, expanded_cases = self.build()
+        for category in ("gsm8k", "arc_challenge"):
+            first = next(c for c in express_cases if c["category"] == category)
+            second = next(c for c in expanded_cases if c["category"] == category)
+            with self.subTest(category=category):
+                self.assertEqual(first["prompt"], second["prompt"])
+                self.assertEqual(first["expected"], second["expected"])
+
+    def test_profile_sizes_stay_as_documented(self):
+        express_cases, expanded_cases = self.build()
+        self.assertEqual(len(express_cases), 72)
+        self.assertEqual(len(expanded_cases), 266)
+
+    def test_mmlu_options_are_lettered_from_a_bare_list(self):
+        _, expanded_cases = self.build()
+        mmlu = next(c for c in expanded_cases if c["category"] == "mmlu")
+        self.assertIn("A. 3\nB. 4\nC. 5\nD. 6", mmlu["prompt"])
+        self.assertEqual(mmlu["expected"], "B")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -121,6 +121,37 @@ def get_rows(dataset: str, config: str, split: str, offsets: list[int]) -> list[
     return [chunks[offset // 100 * 100][offset % 100] for offset in offsets]
 
 
+# --- Case construction ------------------------------------------------------
+
+# Both profiles ask the same questions, so the wording lives here rather than in each entry
+# point. Duplicated, an edit to one copy would move that profile's cases and leave the
+# other's alone -- the two harnesses would quietly stop being comparable while every test
+# still passed. The suffixes are also what the scorers look for, so they are one fact.
+GSM8K_INSTRUCTION = "\n\nEnd the final answer with `#### <number>`."
+CHOICE_INSTRUCTION = "\n\nChoose one option. End with `Answer: X`."
+
+
+def gsm8k_prompt(question: str) -> str:
+    """Ask a GSM8K question, requesting the `#### n` marker the scorer prefers."""
+    return question + GSM8K_INSTRUCTION
+
+
+def gsm8k_expected(answer: str) -> str:
+    """GSM8K ships its reference answer as worked steps followed by `#### n`."""
+    return answer.rsplit("####", 1)[-1].strip()
+
+
+def letter_labels(count: int) -> list[str]:
+    """A, B, C, ... for datasets that ship choices as a bare list (MMLU)."""
+    return [chr(65 + index) for index in range(count)]
+
+
+def choice_prompt(question: str, labels: list[str], texts: list[str]) -> str:
+    """Render a multiple-choice question with its options, one `label. text` per line."""
+    rendered = "\n".join(f"{label}. {text}" for label, text in zip(labels, texts))
+    return question + "\n\n" + rendered + CHOICE_INSTRUCTION
+
+
 # --- Answer extraction ------------------------------------------------------
 
 # Some builds do not split reasoning into `reasoning_content` and instead close it inline

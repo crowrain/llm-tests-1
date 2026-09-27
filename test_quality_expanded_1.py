@@ -72,18 +72,50 @@ def make_cases() -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
     gsm = qc.get_rows("openai/gsm8k", "main", "test", [i * 13 for i in range(100)])
     for index, row in enumerate(gsm):
-        cases.append({"id": f"gsm8k_{index:03d}", "category": "gsm8k", "prompt": row["question"] + "\n\nEnd the final answer with `#### <number>`.", "expected": row["answer"].rsplit("####", 1)[-1].strip(), "max_tokens": 1024})
+        cases.append(
+            {
+                "id": f"gsm8k_{index:03d}",
+                "category": "gsm8k",
+                "prompt": qc.gsm8k_prompt(row["question"]),
+                "expected": qc.gsm8k_expected(row["answer"]),
+                "max_tokens": 1024,
+            }
+        )
     arc = qc.get_rows("allenai/ai2_arc", "ARC-Challenge", "test", [i * 11 for i in range(100)])
     for index, row in enumerate(arc):
-        choices = "\n".join(f"{label}. {text}" for label, text in zip(row["choices"]["label"], row["choices"]["text"]))
-        cases.append({"id": f"arc_{index:03d}", "category": "arc_challenge", "prompt": row["question"] + "\n\n" + choices + "\n\nChoose one option. End with `Answer: X`.", "expected": row["answerKey"].strip().upper(), "max_tokens": 768})
+        cases.append(
+            {
+                "id": f"arc_{index:03d}",
+                "category": "arc_challenge",
+                "prompt": qc.choice_prompt(row["question"], row["choices"]["label"], row["choices"]["text"]),
+                "expected": row["answerKey"].strip().upper(),
+                "max_tokens": 768,
+            }
+        )
     for subject in MMLU_SUBJECTS:
         rows = qc.get_rows("cais/mmlu", subject, "test", [i * 7 for i in range(10)])
         for index, row in enumerate(rows):
-            choices = "\n".join(f"{chr(65 + n)}. {choice}" for n, choice in enumerate(row["choices"]))
-            cases.append({"id": f"mmlu_{subject}_{index:02d}", "category": "mmlu", "subject": subject, "prompt": row["question"] + "\n\n" + choices + "\n\nChoose one option. End with `Answer: X`.", "expected": chr(65 + int(row["answer"])), "max_tokens": 768})
+            # MMLU ships choices as a bare list and the answer as its index.
+            choices = row["choices"]
+            cases.append(
+                {
+                    "id": f"mmlu_{subject}_{index:02d}",
+                    "category": "mmlu",
+                    "subject": subject,
+                    "prompt": qc.choice_prompt(row["question"], qc.letter_labels(len(choices)), choices),
+                    "expected": chr(65 + int(row["answer"])),
+                    "max_tokens": 768,
+                }
+            )
     cases.extend({**item, "category": "instruction_json", "max_tokens": 256} for item in qc.INSTRUCTION_CASES)
-    cases.extend([make_long_case("16k", 64_000, 0.19), make_long_case("64k", 256_000, 0.51), make_long_case("128k", 512_000, 0.73), make_long_case("180k", 720_000, 0.87)])
+    cases.extend(
+        [
+            make_long_case("16k", 64_000, 0.19),
+            make_long_case("64k", 256_000, 0.51),
+            make_long_case("128k", 512_000, 0.73),
+            make_long_case("180k", 720_000, 0.87),
+        ]
+    )
     return cases
 
 

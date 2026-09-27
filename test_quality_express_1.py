@@ -20,25 +20,21 @@ def make_cases() -> list[dict[str, Any]]:
     arc = qc.get_rows("allenai/ai2_arc", "ARC-Challenge", "test", [i * 37 for i in range(30)])
     cases: list[dict[str, Any]] = []
     for index, row in enumerate(gsm):
-        answer = row["answer"].rsplit("####", 1)[-1].strip()
         cases.append(
             {
                 "id": f"gsm8k_{index:02d}",
                 "category": "gsm8k",
-                "prompt": row["question"] + "\n\nEnd the final answer with `#### <number>`.",
-                "expected": answer,
+                "prompt": qc.gsm8k_prompt(row["question"]),
+                "expected": qc.gsm8k_expected(row["answer"]),
                 "max_tokens": 768,
             }
         )
     for index, row in enumerate(arc):
-        labels = row["choices"]["label"]
-        choices = row["choices"]["text"]
-        rendered = "\n".join(f"{label}. {text}" for label, text in zip(labels, choices))
         cases.append(
             {
                 "id": f"arc_{index:02d}",
                 "category": "arc_challenge",
-                "prompt": row["question"] + "\n\n" + rendered + "\n\nChoose one option. End with `Answer: X`.",
+                "prompt": qc.choice_prompt(row["question"], row["choices"]["label"], row["choices"]["text"]),
                 "expected": row["answerKey"].strip().upper(),
                 "max_tokens": 384,
             }
