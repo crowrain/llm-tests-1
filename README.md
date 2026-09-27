@@ -180,6 +180,11 @@ prompt, plus the sampler flags and concurrency. The comparison refuses mismatche
 summaries. `--allow-incompatible` is the explicit escape hatch when such a comparison is
 intentional.
 
+## Published benchmark results
+
+The [Qwen3.8 27B expanded-profile comparison](runs/2026-09-27-qwen38-expanded/README.md)
+contains aggregate results for Q8_0 and NVFP4 deployments, plus machine-readable summaries.
+
 ## Scoring
 
 Extraction is deliberately defensive, because a benchmark that misreads a correct
