@@ -19,13 +19,19 @@ compare the same work.
 | MMLU | — | 50 (5 subjects × 10) |
 | JSON instruction following | 12 | 12 |
 | Needle-in-a-haystack | — | 4 (16k / 64k / 128k / 180k) |
-| Prefill throughput | — | yes |
-| Per-category timings | — | yes |
+| Prefill / decode throughput | yes | yes |
+| Per-category timings | yes | yes |
+| Timeout / retry budget | 900 s / 4 s × 3 | 1800 s / 5 s × 3 |
 | Survives a failed request | no | yes |
 
 Use **express** for a quick read between two candidates, **expanded** when the
-answer matters: it adds knowledge (MMLU), long context, prefill numbers, and it
-records an error instead of aborting the run.
+answer matters: it adds knowledge (MMLU) and long context, and it records an
+error instead of aborting the run.
+
+Both entry points are thin: dataset fetching, answer extraction, scoring, the
+HTTP layer and summary reporting live in `quality_common.py`, so the two
+harnesses cannot drift apart. They differ only in case selection, request
+budget and failure tolerance.
 
 ## Requirements
 
@@ -103,7 +109,7 @@ That is a budget setting, not a quality result, so it is reported separately:
 - per record — `finish_reason`, `truncated`, `answer_empty`
 - per summary — `truncated`, `answer_empty`, `wrong_and_truncated`,
   `wrong_and_complete`
-- per category — `truncated`, in `test_quality_expanded_1.py` only
+- per category — `truncated`, in both harnesses
 
 If `wrong_and_truncated` is high, raise `max_tokens` before drawing conclusions
 about the model.
@@ -133,8 +139,8 @@ their own labels, so old runs stay comparable.
 
 ## Tests
 
-The scoring, extraction and summary helpers are covered by stdlib-only regression
-tests (no endpoint and no network needed):
+The scoring, extraction, summary and run-loop helpers are covered by stdlib-only
+regression tests (no endpoint and no network needed — the request layer is mocked):
 
 ```bash
 python3 -m unittest discover -v
