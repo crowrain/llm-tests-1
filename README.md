@@ -1,5 +1,7 @@
 # llm-tests-1
 
+[![tests](https://github.com/crowrain/llm-tests-1/actions/workflows/tests.yml/badge.svg)](https://github.com/crowrain/llm-tests-1/actions/workflows/tests.yml)
+
 Two reproducible A/B quality harnesses for OpenAI-compatible inference endpoints
 (llama.cpp / llama-swap, vLLM, NInfer, or anything else that serves
 `/v1/chat/completions`).
@@ -171,6 +173,9 @@ request layer is mocked):
 ```bash
 python3 -m unittest discover -v
 ```
+
+They also run automatically on every push to `main` and on pull requests via
+GitHub Actions (Python 3.9 and 3.14).
 
 ## License
 
