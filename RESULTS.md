@@ -15,6 +15,7 @@
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | Ryzen 9 5900X, RTX 4080 SUPER + 2× RTX 5060 Ti, по 16 ГБ; llama.cpp, MoE, MTP, CPU offload | 246/266 (92,48%)³ | 39,3 / 30,6 | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 | 2026-09-27 | Ornith-1.5 35B-A3B **ROCmFP4 STRIX_LEAN** | MS-S1 MAX: Ryzen AI MAX+ 395, Radeon 8060S; llama.cpp ROCm | 241/266 (90,60%)⁴ | 410,3 / 70,7 | 34:39 | [JSON](runs/2026-09-27-ornith-strix-expanded/summary-ornith-1.5-35b-a3b-rocmfp4-strix-lean.json) |
 | 2026-09-27–28 | DeepSeek V4 Flash 0731 **IQ3_XXS** | MS-S1 MAX: Ryzen AI MAX+ 395, Radeon 8060S; Vulkan + DSpark, Q8_0 KV, контекст 262k | 252/266 (94,74%)⁵ | 79,0 / 28,4 | 49:30 | [JSON](runs/2026-09-27-deepseek-v4-flash-expanded/summary-deepseek-v4-flash-0731-iq3xxs-vulkan-dspark.json) |
+| 2026-09-28 | Qwen3.8 27B **Q4_K_XL** | MS-S1 MAX: Ryzen AI MAX+ 395, Radeon 8060S; Gufo + DFlash2, контекст 262k | 242/266 (90,98%)⁶ | 302,8 / 44,7 | 58:28 | [JSON](runs/2026-09-28-qwen38-q4xl-gufo-expanded/summary-qwen38-27b-q4xl-gufo-dflash2.json) |
 
 Скорости — медианы из сводки каждого прогона. Сравниваются целые конфигурации
 инференса, поэтому разница между строками не измеряет влияние одного только кванта.
@@ -28,6 +29,7 @@
 | Qwen3.8 Flash-Next Q4_K_XL | 97 | 96 | 38 | 11 | 4 | 2 | 11 |
 | Ornith-1.5 35B-A3B ROCmFP4 | 93 | 97 | 39 | 12 | 0 | 0 | 14 |
 | DeepSeek V4 Flash 0731 IQ3_XXS | 93 | 97 | 46 | 12 | 4 | 0 | 8 |
+| Qwen3.8 27B Q4_K_XL | 97 | 97 | 32 | 12 | 4 | 0 | 18 |
 
 Контекст — число правильных ответов для 16k, 64k, 128k и 180k. Ошибка сервера
 считается неверным ответом в общем результате.
@@ -40,6 +42,7 @@
 ошибкой. ³ У Flash-Next два запроса MMLU вернули HTTP 502. ⁴ У Ornith все четыре
 поиска в длинном контексте получили неверный ответ; на 16k ответ был усечён. ⁵ У
 DeepSeek восемь ответов завершились по лимиту генерации без итогового текста.
+⁶ У Qwen3.8 Q4 XL усечено 18 ответов, 17 из них в MMLU; длинный контекст пройден 4/4.
 
 ## Как добавить результат
 
