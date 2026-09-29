@@ -19,11 +19,11 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 
 | Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Prefill / decode, ток/с | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 2026-09-27 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 242/266 (90,98%) | 96/100 | 97/100 | 33/50 | 12/12 | 4/4 | 0 / 18 | 706,3 / 95,1 | 22:58 | [JSON](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) |
-| 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 243/266 (91,35%) | 96/100 | 97/100 | 34/50 | 12/12 | 4/4 | 0 / 18 | 202,3 / 81,2 | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
-| 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 114/266 (42,86%)¹ | 19/100 | 79/100 | 12/50 | 0/12 | 4/4 | 0 / 155 | 483,3 / 184,8 | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
-| 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 239/266 (89,85%)² | 96/100 | 97/100 | 33/50 | 12/12 | 1/4 | 3 / 19 | 244,4 / 93,3 | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
-| 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 246/266 (92,48%)³ | 97/100 | 96/100 | 38/50 | 11/12 | 4/4 | 2 / 11 | 39,3 / 30,6 | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
+| 2026-09-27 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 242/266 (90,98%) | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 706,3 / 95,1 | 22:58 | [JSON](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) |
+| 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 🟩 243/266 (91,35%) | 🟩 96/100 | 🟩 97/100 | 🟨 34/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 202,3 / 81,2 | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
+| 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 483,3 / 184,8 | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
+| 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 244,4 / 93,3 | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
+| 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 39,3 / 30,6 | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
@@ -36,16 +36,19 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 
 | Дата | Модель и квант | Backend / режим | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Prefill / decode, ток/с | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 2026-09-27 | Ornith-1.5 35B-A3B **ROCmFP4 STRIX_LEAN** | llama.cpp ROCm | 241/266 (90,60%)⁴ | 93/100 | 97/100 | 39/50 | 12/12 | 0/4 | 0 / 14 | 410,3 / 70,7 | 34:39 | [JSON](runs/2026-09-27-ornith-strix-expanded/summary-ornith-1.5-35b-a3b-rocmfp4-strix-lean.json) |
-| 2026-09-27–28 | DeepSeek V4 Flash 0731 **IQ3_XXS** | Vulkan + DSpark, Q8_0 KV, контекст 262k | 252/266 (94,74%)⁵ | 93/100 | 97/100 | 46/50 | 12/12 | 4/4 | 0 / 8 | 79,0 / 28,4 | 49:30 | [JSON](runs/2026-09-27-deepseek-v4-flash-expanded/summary-deepseek-v4-flash-0731-iq3xxs-vulkan-dspark.json) |
-| 2026-09-28 | Qwen3.8 27B **Q4_K_XL** | Gufo + DFlash2, контекст 262k | 242/266 (90,98%)⁶ | 97/100 | 97/100 | 32/50 | 12/12 | 4/4 | 0 / 18 | 302,8 / 44,7 | 58:28 | [JSON](runs/2026-09-28-qwen38-q4xl-gufo-expanded/summary-qwen38-27b-q4xl-gufo-dflash2.json) |
-| 2026-09-29 | Qwen3.8 Flash Next **IQ4 XS** | Halogen 0.12.0, MTP | 250/266 (93,98%)⁷ | 98/100 | 97/100 | 40/50 | 11/12 | 4/4 | 0 / 8 | 102,7 / 33,9 | 39:30 | [JSON](runs/2026-09-29-qwen38-flashnext-halogen-expanded/summary-qwen38-flashnext-iq4xs-halogen.json) |
+| 2026-09-27 | Ornith-1.5 35B-A3B **ROCmFP4 STRIX_LEAN** | llama.cpp ROCm | 🟩 241/266 (90,60%)⁴ | 🟩 93/100 | 🟩 97/100 | 🟨 39/50 | 🟩 12/12 | 🟥 0/4 | 🟩 0 / 🟥 14 | 410,3 / 70,7 | 34:39 | [JSON](runs/2026-09-27-ornith-strix-expanded/summary-ornith-1.5-35b-a3b-rocmfp4-strix-lean.json) |
+| 2026-09-27–28 | DeepSeek V4 Flash 0731 **IQ3_XXS** | Vulkan + DSpark, Q8_0 KV, контекст 262k | 🟩 252/266 (94,74%)⁵ | 🟩 93/100 | 🟩 97/100 | 🟩 46/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟨 8 | 79,0 / 28,4 | 49:30 | [JSON](runs/2026-09-27-deepseek-v4-flash-expanded/summary-deepseek-v4-flash-0731-iq3xxs-vulkan-dspark.json) |
+| 2026-09-28 | Qwen3.8 27B **Q4_K_XL** | Gufo + DFlash2, контекст 262k | 🟩 242/266 (90,98%)⁶ | 🟩 97/100 | 🟩 97/100 | 🟨 32/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 302,8 / 44,7 | 58:28 | [JSON](runs/2026-09-28-qwen38-q4xl-gufo-expanded/summary-qwen38-27b-q4xl-gufo-dflash2.json) |
+| 2026-09-29 | Qwen3.8 Flash Next **IQ4 XS** | Halogen 0.12.0, MTP | 🟩 250/266 (93,98%)⁷ | 🟩 98/100 | 🟩 97/100 | 🟨 40/50 | 🟩 11/12 | 🟩 4/4 | 🟩 0 / 🟨 8 | 102,7 / 33,9 | 39:30 | [JSON](runs/2026-09-29-qwen38-flashnext-halogen-expanded/summary-qwen38-flashnext-iq4xs-halogen.json) |
 
+**Цветовая шкала:** 🟩 90–100%, 🟨 75–<90%, 🟥 <75% правильных ответов. Для
+ошибок и усечений шкала обратная: 🟩 0, 🟨 1–8, 🟥 больше 8 случаев.
 Скорости — медианы из сводок: prefill / decode. «Контекст» — число правильных
 ответов в поисковых заданиях на 16k, 64k, 128k и 180k токенов. В столбце
 «Ошибки / усечения» указаны ответы с ошибкой сервера и завершившиеся усечением;
 оба типа считаются неверными в общем результате. Сравниваются полные конфигурации
-инференса, поэтому строки не изолируют влияние одного только кванта.
+инференса, поэтому строки не изолируют влияние одного только кванта. Скорость и
+время оставлены без цветовой оценки: они зависят от размера модели и платформы.
 
 ¹ У Qwen3.6 усечено 155 ответов, 136 остались пустыми. Показатель
 42,86% характеризует этот запуск с данным бюджетом генерации; для оценки качества
