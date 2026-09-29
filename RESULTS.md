@@ -24,6 +24,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 483,3 / 184,8 | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 244,4 / 93,3 | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 39,3 / 30,6 | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
+| 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP | 🟩 248/266 (93,23%) | 🟩 97/100 | 🟩 97/100 | 🟨 41/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟨 8 | 50,4 / 93,5 | 27:10⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
 
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
@@ -63,6 +64,10 @@ DeepSeek восемь ответов завершились по лимиту г
 ⁷ У Qwen3.8 Flash Next восемь ответов MMLU усечены; ошибок сервера не было.
 ⁸ У Ling Flash усечён 21 ответ, 19 остались пустыми. Запрос с контекстом 180k
 завершился HTTP 502 после повторных попыток; запросы на 16k, 64k и 128k прошли.
+⁹ У Strata установлен лимит контекста 65 536 токенов: задания 64k, 128k и 180k
+вернули HTTP 400, поскольку вход вместе с резервом генерации превышает лимит; 16k
+пройдено. Усечены 7 ответов MMLU и 1 ARC. Время — сумма активной длительности двух
+частей одного возобновлённого прогона.
 
 ## Как добавить результат
 
