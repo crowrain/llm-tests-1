@@ -22,7 +22,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 
 | Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
-| 2026-09-27 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 242/266 (90,98%) | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 95,1 | нет данных | 22:58 | [JSON](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) |
+| 2026-09-27 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 242/266 (90,98%) | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 95,1 | 2512,3 / 1897,5 / 1424,0 / 1183,4¹⁰ | 37:30¹⁰ | [JSON](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) · [prefill](runs/2026-09-27-qwen38-ninfer-expanded/prefill-qwen38-ninfer-nvfp4-tp2-2x5060ti.jsonl) |
 | 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 🟩 243/266 (91,35%) | 🟩 96/100 | 🟩 97/100 | 🟨 34/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 81,2 | нет данных | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
 | 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 184,8 | нет данных | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | нет данных | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
@@ -73,6 +73,9 @@ DeepSeek восемь ответов завершились по лимиту г
 180k пройдены. Усечены 8 ответов MMLU и 1 GSM8K. Сводка schema v2 включает 30
 отдельных cold/cached prefill-проб: cold backend — 1112,7 ток/с на 16k, 1126,3
 на 64k, 1110,4 на 128k и 1077,5 на 182k. Время включает scored-часть и эти пробы.
+¹⁰ Для NInfer NVFP4 scored-ответы из прогона 2026-09-27 не пересчитывались; 30
+prefill-проб проведены 2026-09-30 (по три cold и cached на длину, все без ошибок).
+Время — сумма активного времени обеих частей; prefill-замеры — cold backend rates.
 
 ## Как добавить результат
 
