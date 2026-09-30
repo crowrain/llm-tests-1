@@ -26,7 +26,7 @@ def make_cases() -> list[dict[str, Any]]:
                 "category": "gsm8k",
                 "prompt": qc.gsm8k_prompt(row["question"]),
                 "expected": qc.gsm8k_expected(row["answer"]),
-                "max_tokens": 768,
+                "max_tokens": 4096,
             }
         )
     for index, row in enumerate(arc):
@@ -36,11 +36,11 @@ def make_cases() -> list[dict[str, Any]]:
                 "category": "arc_challenge",
                 "prompt": qc.choice_prompt(row["question"], row["choices"]["label"], row["choices"]["text"]),
                 "expected": row["answerKey"].strip().upper(),
-                "max_tokens": 384,
+                "max_tokens": 4096,
             }
         )
     for item in qc.INSTRUCTION_CASES:
-        cases.append({**item, "category": "instruction_json", "max_tokens": 256})
+        cases.append({**item, "category": "instruction_json", "max_tokens": 4096})
     return cases
 
 

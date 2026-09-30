@@ -22,12 +22,22 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 
 | Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
-| 2026-09-27 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 242/266 (90,98%) | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 95,1 | 2512,3 / 1897,5 / 1424,0 / 1183,4¹⁰ | 37:30¹⁰ | [JSON](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) · [prefill](runs/2026-09-27-qwen38-ninfer-expanded/prefill-qwen38-ninfer-nvfp4-tp2-2x5060ti.jsonl) |
+| 2026-09-27 / 2026-09-30 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 258/266 (96,99%)¹² | 🟩 96/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 2¹² | 95,1 | 2512,3 / 1897,5 / 1424,0 / 1183,4¹⁰ | 37:30¹⁰ | [полный тест](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) · [повтор MMLU](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) · [prefill](runs/2026-09-27-qwen38-ninfer-expanded/prefill-qwen38-ninfer-nvfp4-tp2-2x5060ti.jsonl) |
 | 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 🟩 243/266 (91,35%) | 🟩 96/100 | 🟩 97/100 | 🟨 34/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 81,2 | нет данных | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
 | 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 184,8 | нет данных | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | нет данных | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | нет данных | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 | 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 252/266 (94,74%) | 🟩 97/100 | 🟩 98/100 | 🟨 41/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 9 | 91,4 | 1112,7 / 1126,3 / 1110,4 / 1077,5 | 50:17⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
+### Повторная оценка MMLU: Qwen3.8 27B NVFP4
+
+Оценка MMLU в строке выше заменена результатом отдельного прогона 50 вопросов с
+`max_tokens=4096`. Его медиана decode — 88,7 ток/с; короткий prefill-пробник
+(62 токена) показал 458,6 ток/с cold и 7102,0 ток/с cached. Cached-скорость
+отражает повтор из кэша и не сопоставима с обработкой нового текста.
+
+| Категория | Результат | Усечено / пусто | Сводка | Prefill |
+|---|---:|---:|---|---|
+| MMLU, 2026-09-30 | 🟩 49/50 (98%) | 🟩 0 / 0 | [JSON](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) | [62 токена](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/prefill-qwen38-ninfer-nvfp4-mmlu-4096.jsonl) |
 
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
@@ -76,6 +86,12 @@ DeepSeek восемь ответов завершились по лимиту г
 ¹⁰ Для NInfer NVFP4 scored-ответы из прогона 2026-09-27 не пересчитывались; 30
 prefill-проб проведены 2026-09-30 (по три cold и cached на длину, все без ошибок).
 Время — сумма активного времени обеих частей; prefill-замеры — cold backend rates.
+¹¹ Prefill здесь измерен отдельным коротким 62-токенным пробником; cached-скорость
+не характеризует обработку нового текста и не сопоставима с cold prefill.
+¹² Для NVFP4 общий счёт и количество усечений пересчитаны с заменой только MMLU
+результата на повтор от 2026-09-30 (`max_tokens=4096`); результаты GSM8K, ARC, JSON и
+длинного контекста взяты из полного прогона 2026-09-27. Сводки обоих прогонов связаны
+в таблице. Decode, длинные prefill-пробы и время относятся к полному прогону.
 
 ## Как добавить результат
 

@@ -1572,6 +1572,12 @@ class SharedCaseBuilderTests(unittest.TestCase):
         self.assertEqual(len(express_cases), 72)
         self.assertEqual(len(expanded_cases), 266)
 
+    def test_scored_cases_share_4096_token_budget(self):
+        express_cases, expanded_cases = self.build()
+        for profile, cases in (("express", express_cases), ("expanded", expanded_cases)):
+            with self.subTest(profile=profile):
+                self.assertEqual({case["max_tokens"] for case in cases}, {4096})
+
     def test_mmlu_options_are_lettered_from_a_bare_list(self):
         _, expanded_cases = self.build()
         mmlu = next(c for c in expanded_cases if c["category"] == "mmlu")

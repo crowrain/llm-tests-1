@@ -64,13 +64,13 @@ def make_long_case(label: str, char_budget: int, fraction: float) -> dict[str, A
         f"What is the storage label of Record {target:06d}? Search the archive. "
         "End with exactly `Key: <label>` and no alternative label."
     )
-    # 256 truncated the deepest archive mid-answer; the 180k tiebreak needed 282 tokens.
+    # Keep the same completion budget as the other scored cases, including reasoning tokens.
     return {
         "id": f"needle_{label}",
         "category": f"long_context_{label}",
         "prompt": prompt,
         "expected": expected,
-        "max_tokens": 768,
+        "max_tokens": 4096,
         "approx_chars": len(prompt),
         "target_record": target,
     }
@@ -86,7 +86,7 @@ def make_cases() -> list[dict[str, Any]]:
                 "category": "gsm8k",
                 "prompt": qc.gsm8k_prompt(row["question"]),
                 "expected": qc.gsm8k_expected(row["answer"]),
-                "max_tokens": 1024,
+                "max_tokens": 4096,
             }
         )
     arc = qc.get_rows("allenai/ai2_arc", "ARC-Challenge", "test", [i * 11 for i in range(100)])
@@ -97,7 +97,7 @@ def make_cases() -> list[dict[str, Any]]:
                 "category": "arc_challenge",
                 "prompt": qc.choice_prompt(row["question"], row["choices"]["label"], row["choices"]["text"]),
                 "expected": row["answerKey"].strip().upper(),
-                "max_tokens": 768,
+                "max_tokens": 4096,
             }
         )
     for subject in MMLU_SUBJECTS:
@@ -112,10 +112,10 @@ def make_cases() -> list[dict[str, Any]]:
                     "subject": subject,
                     "prompt": qc.choice_prompt(row["question"], qc.letter_labels(len(choices)), choices),
                     "expected": chr(65 + int(row["answer"])),
-                    "max_tokens": 768,
+                    "max_tokens": 4096,
                 }
             )
-    cases.extend({**item, "category": "instruction_json", "max_tokens": 256} for item in qc.INSTRUCTION_CASES)
+    cases.extend({**item, "category": "instruction_json", "max_tokens": 4096} for item in qc.INSTRUCTION_CASES)
     cases.extend(
         [
             make_long_case("16k", 64_000, 0.19),

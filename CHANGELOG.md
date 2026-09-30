@@ -8,6 +8,12 @@ can be checked out and diffed.
 
 ## Unreleased
 
+### Quality completion budget
+
+- New express and expanded fixtures give every scored case 4096 completion tokens,
+  including reasoning. Existing pinned fixtures and results remain unchanged; prefill
+  probes still generate at most one token.
+
 ### Prefill measurement
 
 - Added three distinct cold candidates and three immediate repeat candidates per selected
