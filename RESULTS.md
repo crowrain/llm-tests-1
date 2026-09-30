@@ -24,7 +24,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
 | 2026-09-27 / 2026-09-30 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 258/266 (96,99%)¹² | 🟩 96/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 2¹² | 95,1 | 2512,3 / 1897,5 / 1424,0 / 1183,4¹⁰ | 37:30¹⁰ | [полный тест](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) · [повтор MMLU](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) · [prefill](runs/2026-09-27-qwen38-ninfer-expanded/prefill-qwen38-ninfer-nvfp4-tp2-2x5060ti.jsonl) |
 | 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 🟩 243/266 (91,35%) | 🟩 96/100 | 🟩 97/100 | 🟨 34/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 81,2 | нет данных | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
-| 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 184,8 | нет данных | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
+| 2026-09-30 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟩 244/266 (91,73%)¹ | 🟩 94/100 | 🟩 95/100 | 🟨 40/50 | 🟩 11/12 | 🟩 4/4 | 🟩 0 / 🟥 15 | 184,1 | 4482,5 / 3880,8 / 3220,8 / 2814,3 | 40:09 | [JSON](runs/2026-09-30-qwen36-q4km-expanded-4096/summary-qwen36-35b-a3b-q4km-moe-mtp-4096.json) · [prefill](runs/2026-09-30-qwen36-q4km-expanded-4096/prefill-qwen36-35b-a3b-q4km-moe-mtp-4096.jsonl) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | нет данных | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | нет данных | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 | 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 260/266 (97,74%) | 🟩 98/100 | 🟩 98/100 | 🟩 48/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 92,1 | 1111,2 / 1125,0 / 1109,7 / 1073,9 | 51:20⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/summary-qwen38-flashnext-iq3xxs-strata-4096.json) · [prefill](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/prefill-qwen38-flashnext-iq3xxs-strata-4096.jsonl) |
@@ -67,9 +67,12 @@ Decode — медиана из backend `timings`; cold prefill backend указ�
 инференса, поэтому строки не изолируют влияние одного только кванта. Скорость и
 время оставлены без цветовой оценки: они зависят от размера модели и платформы.
 
-¹ У Qwen3.6 усечено 155 ответов, 136 остались пустыми. Показатель
-42,86% характеризует этот запуск с данным бюджетом генерации; для оценки качества
-модели нужен повторный прогон с исправленным режимом reasoning.
+¹ Обновлённый прогон Qwen3.6 выполнен с `max_tokens=4096`: 15 ответов усечены,
+14 из них пустые (10 MMLU, 3 ARC, 2 GSM8K); ошибок запросов нет, ещё 7 ответов
+неверны при завершённой генерации. Все четыре задания длинного контекста пройдены.
+Холодный backend prefill — 4482,5 ток/с на 16k, 3880,8 на 64k, 3220,8 на 128k и
+2814,3 на 182k. Короткие `<512` пробы классифицированы как mixed, поэтому cold rate
+для этой длины не приводится. Время 40:09 включает scored-часть и 30 prefill-проб.
 
 ² У IQ3_S задан контекст 49 152 токена: запросы на 64k, 128k и 180k завершились
 ошибкой. ³ У Flash-Next два запроса MMLU вернули HTTP 502. ⁴ У Ornith все четыре
