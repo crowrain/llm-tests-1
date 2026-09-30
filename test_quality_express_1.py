@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, reproducible A/B quality test: the express profile (72 fast cases).
+"""Bounded, reproducible A/B quality test: the express profile (72 fast scored cases).
 
 Thin entry point: dataset fetching, answer extraction, scoring, the HTTP layer and
 summary reporting live in quality_common.py. The express profile spreads fewer,

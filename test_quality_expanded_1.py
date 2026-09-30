@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible, bounded A/B test: the expanded profile (266 cases).
+"""Reproducible, bounded A/B test: the expanded profile (266 scored cases).
 
 Thin entry point: dataset fetching, answer extraction, scoring, the HTTP layer and
 summary reporting live in quality_common.py. The expanded profile adds knowledge
@@ -137,7 +137,7 @@ if __name__ == "__main__":
         tolerate_errors=True,
         profile="expanded",
         description=(
-            "Expanded profile: 266 cases including MMLU and long-context needles; "
+            "Expanded profile: 266 scored cases including MMLU and long-context needles; "
             "a failed request is recorded."
         ),
     )

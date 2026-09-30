@@ -4,8 +4,8 @@
 Reads the summary-<model>.json files the harnesses write and answers the
 question the harnesses exist for: which deployment answered better, and how
 fast? It first verifies that profile, fixtures, recorded selection and request options match,
-then prints accuracy over scored responses alongside request accuracy, truncation
-and error counts, and median prefill/decode throughput.
+then prints accuracy over scored responses alongside request accuracy, truncation,
+errors, decode speed, and separate prefill rates by input length and cache state.
 
 Usage:
   python3 compare_quality.py runs/2026-09-27
@@ -56,16 +56,24 @@ def compatibility_issues(s_a: dict[str, Any], s_b: dict[str, Any]) -> list[str]:
             issues.append(f"{side} run_identity is missing {', '.join(missing)}")
     if issues:
         return issues
-    if identity_a["schema_version"] != 1 or identity_b["schema_version"] != 1:
+    versions = (identity_a["schema_version"], identity_b["schema_version"])
+    if versions[0] != versions[1] or versions[0] not in (1, 2):
         issues.append(
             "unsupported run_identity schema "
-            f"({identity_a['schema_version']!r}, {identity_b['schema_version']!r})"
+            f"({versions[0]!r}, {versions[1]!r})"
         )
+    if versions == (2, 2):
+        for side, identity in (("first", identity_a), ("second", identity_b)):
+            missing = sorted({"probe_sha256", "probe_selection_sha256"} - identity.keys())
+            if missing:
+                issues.append(f"{side} run_identity is missing {', '.join(missing)}")
     for key, description in (
         ("profile", "harness profile"),
         ("fixtures_sha256", "full fixture set"),
         ("selection_sha256", "scored case selection"),
         ("request_options", "request and concurrency options"),
+        ("probe_sha256", "full prefill probe set"),
+        ("probe_selection_sha256", "recorded prefill probes"),
     ):
         if identity_a.get(key) != identity_b.get(key):
             issues.append(f"{description} differs ({identity_a.get(key)!r} != {identity_b.get(key)!r})")
@@ -168,11 +176,30 @@ def render(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) -
         cat_acc_b = quality_accuracy(cat_b) if isinstance(cat_b, dict) else None
         lines.append(row(category, _pct(cat_acc_a), _pct(cat_acc_b), _pp(cat_acc_a, cat_acc_b)))
     lines.append("")
-    lines.append("Speed (medians)")
+    lines.append("Decode speed (backend median)")
     dec_a, dec_b = s_a.get("median_decode_tps"), s_b.get("median_decode_tps")
     lines.append(row("decode tps", _num(dec_a), _num(dec_b), _rel(dec_a, dec_b)))
-    pre_a, pre_b = s_a.get("median_prefill_tps"), s_b.get("median_prefill_tps")
-    lines.append(row("prefill tps", _num(pre_a), _num(pre_b), _rel(pre_a, pre_b)))
+    buckets = ("<512", "16K", "64K", "128K", "180K/262K")
+    if s_a.get("prefill_by_length") or s_b.get("prefill_by_length"):
+        lines.extend(("", "Prefill by input length (one output token; observed cache state)"))
+        for bucket in buckets:
+            a_bucket = s_a.get("prefill_by_length", {}).get(bucket)
+            b_bucket = s_b.get("prefill_by_length", {}).get(bucket)
+            if not a_bucket and not b_bucket:
+                continue
+            lines.append(bucket)
+            for state in ("cold", "cached"):
+                a_state = (a_bucket or {}).get(state, {})
+                b_state = (b_bucket or {}).get(state, {})
+                lines.append(row(f"{state} samples", _count(a_state.get("samples")), _count(b_state.get("samples"))))
+                for label, key in (("wall input t/s", "wall_input_tps"), ("backend fresh t/s", "backend_fresh_tps")):
+                    a_value, b_value = a_state.get(key), b_state.get(key)
+                    lines.append(row(f"{state} {label}", _num(a_value), _num(b_value), _rel(a_value, b_value)))
+            if (a_bucket or {}).get("unknown") or (b_bucket or {}).get("unknown"):
+                for phase in ("planned_cold", "planned_repeat"):
+                    a_value = (a_bucket or {}).get(phase, {}).get("wall_input_tps")
+                    b_value = (b_bucket or {}).get(phase, {}).get("wall_input_tps")
+                    lines.append(row(f"{phase} wall t/s", _num(a_value), _num(b_value), _rel(a_value, b_value)))
     return "\n".join(lines)
 
 
@@ -189,7 +216,6 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
                 "errors",
                 "answer_empty",
                 "median_decode_tps",
-                "median_prefill_tps",
             )
         }
 
@@ -201,6 +227,7 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
             "name": name,
             "model": summary.get("model") or name,
             "label": summary.get("label") or name,
+            "prefill_by_length": summary.get("prefill_by_length", {}),
             **subset(summary),
         }
 
@@ -212,12 +239,24 @@ def as_json(name_a: str, s_a: dict[str, Any], name_b: str, s_b: dict[str, Any]) 
         acc_a = quality_accuracy(cat_a)
         acc_b = quality_accuracy(cat_b)
         by_category[category] = {"a": acc_a, "b": acc_b, "delta": delta(acc_a, acc_b)}
+    prefill_deltas: dict[str, Any] = {}
+    for bucket in sorted(set(s_a.get("prefill_by_length", {})) | set(s_b.get("prefill_by_length", {}))):
+        a_bucket = s_a.get("prefill_by_length", {}).get(bucket, {})
+        b_bucket = s_b.get("prefill_by_length", {}).get(bucket, {})
+        prefill_deltas[bucket] = {}
+        for state in ("cold", "cached", "planned_cold", "planned_repeat"):
+            a_state, b_state = a_bucket.get(state, {}), b_bucket.get(state, {})
+            prefill_deltas[bucket][state] = {
+                key: delta(a_state.get(key), b_state.get(key))
+                for key in ("wall_input_tps", "backend_fresh_tps")
+            }
     return {
         "a": side(name_a, s_a),
         "b": side(name_b, s_b),
         "delta_accuracy": delta(quality_accuracy(s_a), quality_accuracy(s_b)),
         "delta_request_accuracy": delta(s_a.get("accuracy"), s_b.get("accuracy")),
         "by_category": by_category,
+        "delta_prefill_by_length": prefill_deltas,
     }
 
 

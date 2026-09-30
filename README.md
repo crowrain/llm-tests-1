@@ -17,7 +17,7 @@ See the [benchmark results](RESULTS.md) for tested models, hardware, accuracy an
 
 | | `test_quality_express_1.py` | `test_quality_expanded_1.py` |
 |---|---|---|
-| Cases | 72 | 266 |
+| Scored cases | 72 | 266 |
 | GSM8K | 30 | 100 |
 | ARC-Challenge | 30 | 100 |
 | MMLU | — | 50 (5 subjects × 10) |
@@ -36,6 +36,15 @@ scoring, the HTTP layer, the run loop and summary reporting live in `quality_com
 so the two harnesses cannot drift apart. They differ only in case selection, request
 budget and failure tolerance — asked the same question, both profiles produce the same
 prompt, which a test asserts.
+
+After the scored cases, the harness runs separate prefill probes for the lengths present
+in the selected fixtures. Express adds six short requests; a full expanded run adds 30
+requests across `<512`, `16K`, `64K`, `128K`, and `180K/262K`. Each length has three
+distinct prompts, each sent twice in succession. The second request is a cache candidate;
+the report calls it cached only when returned token counters confirm at least 50% reuse.
+The current expanded fixture supplies the 180K case for the final bucket.
+Probes always run one at a time, even with `--concurrency N` for the scored cases.
+These extra requests can substantially extend a long-context run.
 
 ## Requirements
 
@@ -94,7 +103,7 @@ OPENAI_API_KEY=sk-... python3 test_quality_express_1.py \
 | `--api-key` | bearer token for endpoints that require one. Defaults to `$OPENAI_API_KEY`. Entries match `--model`; an empty position means no key for that endpoint (`--api-key ',secret'`). |
 | `--output-dir` | directory for `fixtures.json`, `results-<label>.jsonl`, `summary-<label>.json` (created if missing). |
 | `--make-fixtures` | force a rebuild of `fixtures.json`. Cannot be combined with `--resume`. |
-| `--resume` | skip cases already recorded in `results-<label>.jsonl` and append to the file; a torn final line left by a crash is dropped. Refuses to run if the recorded cases no longer match the current fixtures. |
+| `--resume` | skip scored cases and prefill probes already recorded in their JSONL files; a torn final line left by a crash is dropped. Refuses to run if recorded cases no longer match the current fixtures. Active `elapsed_seconds` accumulates across resumed sessions. |
 | `--overwrite` | replace an existing `results-<label>.jsonl` instead of refusing to run. Without it, a run that would discard recorded cases stops and names both ways forward. |
 | `--categories` | run a subset by category — exact names or prefixes, comma-separated (`long_context` selects all four needle archives). A token matching nothing is an error, so a typo cannot silently run an empty subset. |
 | `--limit N` | cap the run to the first N selected cases (fixture order). Combines with `--resume`: already-recorded cases stay skipped. |
@@ -135,7 +144,8 @@ dead or closed connection is dropped and reconnected on retry.
 runs/2026-09-27/
   fixtures.json              the pinned cases (version + profile header + cases), reused by later models
   results-<label>.jsonl      one record per case, full content kept
-  summary-<label>.json       accuracy, run identity, throughput, truncation counts
+  prefill-<label>.jsonl      separate, unscored prefill probes and token/time counters
+  summary-<label>.json       accuracy, length-specific prefill, decode, elapsed time
 ```
 
 A run never discards recorded cases by accident. `results-<label>.jsonl` is replaced only
@@ -160,6 +170,22 @@ Before rebuilding fixtures, the harness checks every target results file. If a r
 would be invalidated, `--make-fixtures` stops without touching `fixtures.json`; use
 `--overwrite` or another output directory deliberately.
 
+Each prefill record keeps `prompt_n` (fresh tokens processed by the backend), `cache_n`
+(reused tokens), `read_n` (the actual full prompt token count from `usage.prompt_tokens`,
+or `prompt_n + cache_n` when usage is absent), backend `prompt_ms`, and request
+`wall_seconds`. The raw `usage` and `timings` objects are also retained. Cold means at
+most 10% cached; cached means at least 50%; intermediate and unreported counters are
+shown as mixed or unknown. The summary reports how many samples support each rate.
+`backend_fresh_tps` is fresh tokens divided by backend `prompt_ms`. `wall_input_tps`
+is all read tokens divided by request wall time, including transport and the one-token
+completion. It remains available when `timings` is absent, provided the API reports
+`usage.prompt_tokens`. Planned first/repeat wall rates are kept separately when cache
+telemetry is unavailable. Rates combine all eligible tokens and seconds in a bucket,
+not a median of per-request rates. Neither rate is inferred from prompt character length.
+The summary's `elapsed_seconds` includes both scored cases and probes across resumes;
+legacy interrupted files without cumulative checkpoints can only recover an estimate
+from recorded request durations.
+
 ## Comparison
 
 `compare_quality.py` answers the question the harnesses exist for — which
@@ -175,7 +201,8 @@ python3 compare_quality.py runs/a/summary-model-a.json runs/b/summary-model-b.js
 ```
 
 It prints overall and per-category accuracy with the delta (second model minus first),
-truncation and error counts, and median prefill/decode throughput. Quality deltas use
+truncation and error counts, backend decode speed, and cold/cached prefill by input
+length. Quality deltas use
 `accuracy_excluding_errors`; request accuracy remains visible separately. Summaries carry a
 profile and SHA-256 identities for the full fixtures, actual scored selection and system
 prompt, plus the sampler flags and concurrency. The comparison refuses mismatched or legacy

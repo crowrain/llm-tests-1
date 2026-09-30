@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import http.client
 import json
+import math
 import os
 import re
 import statistics
@@ -21,6 +22,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fractions import Fraction
 from pathlib import Path
@@ -496,7 +498,6 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
                 sum(r["correct"] for r in clean_rows) / len(clean_rows) if clean_rows else None
             ),
             "truncated": sum(1 for r in rows if r.get("truncated")),
-            "median_prefill_tps": median_timing(rows, "prompt_per_second"),
             "median_decode_tps": median_timing(rows, "predicted_per_second"),
             "median_elapsed_seconds": statistics.median(elapsed) if elapsed else None,
         }
@@ -511,7 +512,6 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     result["answer_empty"] = sum(1 for r in clean if r.get("answer_empty"))
     result["wrong_and_truncated"] = sum(1 for r in clean if r.get("truncated") and not r["correct"])
     result["wrong_and_complete"] = sum(1 for r in clean if not r.get("truncated") and not r["correct"])
-    result["median_prefill_tps"] = median_timing(records, "prompt_per_second")
     result["median_decode_tps"] = median_timing(records, "predicted_per_second")
     return result
 
@@ -612,9 +612,14 @@ def _emit(
     case: dict[str, Any],
     record: dict[str, Any],
     started: float,
+    elapsed_offset: float = 0.0,
+    run_id: str | None = None,
 ) -> None:
     """Stream one record and a progress line. Crash-safe: each record lands on its own
     flushed line, which is what makes --resume possible."""
+    record["run_elapsed_seconds"] = elapsed_offset + time.monotonic() - started
+    if run_id is not None:
+        record["run_id"] = run_id
     output.write(json.dumps(record, ensure_ascii=False) + "\n")
     output.flush()
     print(
@@ -639,6 +644,9 @@ def run_cases(
     concurrency: int = 1,
     api_key: str | None = None,
     label: str | None = None,
+    started_at: float | None = None,
+    elapsed_offset: float = 0.0,
+    run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Send each case to the endpoint, score the answer and stream one JSONL record per
     case to ``output``. Returns the records of the cases actually sent.
@@ -665,7 +673,7 @@ def run_cases(
             flush=True,
         )
     records: list[dict[str, Any]] = []
-    started = time.monotonic()
+    started = started_at if started_at is not None else time.monotonic()
     worker_kwargs = dict(
         timeout=timeout,
         retry_delay=retry_delay,
@@ -677,7 +685,7 @@ def run_cases(
     if concurrency <= 1:
         for case in pending:
             record = _process_case(base_url, model, case, **worker_kwargs)
-            _emit(output, name, len(records) + 1, len(pending), case, record, started)
+            _emit(output, name, len(records) + 1, len(pending), case, record, started, elapsed_offset, run_id)
             records.append(record)
     else:
         pool = ThreadPoolExecutor(max_workers=concurrency)
@@ -686,7 +694,7 @@ def run_cases(
             for future in as_completed(futures):
                 case = futures[future]
                 record = future.result()  # propagates worker exceptions (abort mode)
-                _emit(output, name, len(records) + 1, len(pending), case, record, started)
+                _emit(output, name, len(records) + 1, len(pending), case, record, started, elapsed_offset, run_id)
                 records.append(record)
         finally:
             # Do not wait for in-flight requests on the way out (abort mode would hang).
@@ -708,6 +716,9 @@ def run_cases_interleaved(
     send_reasoning_effort: bool = True,
     api_keys: list[str | None] | None = None,
     labels: list[str] | None = None,
+    started_at: float | None = None,
+    elapsed_offsets: dict[str, float] | None = None,
+    run_ids: dict[str, str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Strict A/B interleave: for every case, ask each model in turn, one request in
     flight at a time. Each model's answers thus span the same time window, so machine
@@ -737,7 +748,7 @@ def run_cases_interleaved(
                 flush=True,
             )
     keys = api_keys if api_keys is not None else [None] * len(models)
-    started = time.monotonic()
+    started = started_at if started_at is not None else time.monotonic()
     for case in cases:
         for label, model, base_url, api_key in zip(run_labels, models, base_urls, keys):
             if case["id"] in skip_by_model[label]:
@@ -761,6 +772,8 @@ def run_cases_interleaved(
                 case,
                 record,
                 started,
+                (elapsed_offsets or {}).get(label, 0.0),
+                (run_ids or {}).get(label),
             )
             records_by_model[label].append(record)
     return records_by_model
@@ -777,6 +790,184 @@ def cases_sha256(cases: list[dict[str, Any]]) -> str:
     """Stable identity for an ordered case list, independent of JSON whitespace."""
     encoded = json.dumps(cases, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+PREFILL_REPETITIONS = 3
+PREFILL_BUCKETS = ("<512", "16K", "64K", "128K", "180K/262K")
+
+
+def prefill_probes(fixtures: list[dict[str, Any]], profile: str | None) -> list[dict[str, Any]]:
+    """Three distinct cold candidates, each followed by an identical cache candidate.
+
+    These requests are separate from the scored fixtures. A nonce at the start of each
+    prompt prevents one repetition from reusing another's long prefix; actual cache use
+    is determined from response counters, never assumed from this planned order.
+    """
+    if profile not in {"express", "expanded"}:
+        return []
+    bases: dict[str, str] = {}
+    if any(not case["category"].startswith("long_context_") for case in fixtures):
+        bases["<512"] = "Reply with OK."
+    categories = {
+        "long_context_16k": "16K",
+        "long_context_64k": "64K",
+        "long_context_128k": "128K",
+        "long_context_180k": "180K/262K",
+        "long_context_262k": "180K/262K",
+    }
+    for case in fixtures:
+        bucket = categories.get(case["category"])
+        if bucket and bucket not in bases:
+            bases[bucket] = case["prompt"]
+    probes = []
+    for bucket in PREFILL_BUCKETS:
+        if bucket not in bases:
+            continue
+        for repetition in range(1, PREFILL_REPETITIONS + 1):
+            nonce = hashlib.sha256(f"prefill:{bucket}:{repetition}".encode()).hexdigest()[:16]
+            prompt = f"Benchmark nonce {nonce}.\n{bases[bucket]}"
+            stem = "lt512" if bucket == "<512" else bucket.lower().replace("/", "_")
+            for phase in ("cold", "repeat"):
+                probes.append({
+                    "id": f"prefill_{stem}_{repetition}_{phase}",
+                    "bucket": bucket,
+                    "repetition": repetition,
+                    "phase": phase,
+                    "prompt": prompt,
+                    "max_tokens": 1,
+                })
+    return probes
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _positive_number(value: Any) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    return None
+
+
+def _process_prefill_probe(
+    base_url: str,
+    model: str,
+    probe: dict[str, Any],
+    *,
+    timeout: int,
+    retry_delay: float,
+    tolerate_errors: bool,
+    send_seed: bool,
+    send_reasoning_effort: bool,
+    api_key: str | None,
+) -> dict[str, Any]:
+    began = time.monotonic()
+    error = None
+    try:
+        response = request(
+            base_url, model, probe, timeout=timeout, retry_delay=retry_delay,
+            send_seed=send_seed, send_reasoning_effort=send_reasoning_effort, api_key=api_key,
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("choices"), list) or not response["choices"]:
+            raise RuntimeError("prefill probe returned no usable completion")
+        choice = response["choices"][0]
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            raise RuntimeError("prefill probe returned a malformed completion")
+    except Exception as exc:
+        if not tolerate_errors:
+            raise
+        response = {}
+        error = repr(exc)
+    wall_seconds = time.monotonic() - began
+    usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+    timings = response.get("timings") if isinstance(response.get("timings"), dict) else {}
+    prompt_n = _nonnegative_int(timings.get("prompt_n"))
+    cache_n = _nonnegative_int(timings.get("cache_n"))
+    details = usage.get("prompt_tokens_details")
+    if cache_n is None and isinstance(details, dict):
+        cache_n = _nonnegative_int(details.get("cached_tokens"))
+    read_n = _nonnegative_int(usage.get("prompt_tokens"))
+    if read_n is None and prompt_n is not None and cache_n is not None:
+        read_n = prompt_n + cache_n
+    prompt_ms = _positive_number(timings.get("prompt_ms"))
+    observed_cache = "unknown"
+    if not error and read_n and cache_n is not None and cache_n <= read_n:
+        fraction = cache_n / read_n
+        if fraction <= 0.1:
+            observed_cache = "cold"
+        elif fraction >= 0.5:
+            observed_cache = "cached"
+        else:
+            observed_cache = "mixed"
+    return {
+        "id": probe["id"],
+        "prompt_sha256": hashlib.sha256(probe["prompt"].encode()).hexdigest(),
+        "bucket": probe["bucket"],
+        "repetition": probe["repetition"],
+        "phase": probe["phase"],
+        "prompt_n": prompt_n,
+        "cache_n": cache_n,
+        "read_n": read_n,
+        "prompt_ms": prompt_ms,
+        "wall_seconds": wall_seconds,
+        "observed_cache": observed_cache,
+        "usage": response.get("usage"),
+        "timings": response.get("timings"),
+        "error": error,
+    }
+
+
+def summarize_prefill(probes: list[dict[str, Any]], records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report sustained rates per length and observed cache state, with sample coverage.
+
+    Backend rate uses only fresh tokens and backend prompt_ms. Wall input rate uses
+    the full tokenized prompt and request time, including transport and one output token.
+    """
+    def rates(selected: list[dict[str, Any]]) -> dict[str, Any]:
+        selected = [row for row in selected if not row.get("error")]
+        wall = [
+            row for row in selected
+            if _nonnegative_int(row.get("read_n")) and _positive_number(row.get("wall_seconds"))
+        ]
+        backend = [
+            row for row in selected
+            if _nonnegative_int(row.get("prompt_n")) and _positive_number(row.get("prompt_ms"))
+        ]
+        wall_seconds = sum(row["wall_seconds"] for row in wall)
+        prompt_ms = sum(row["prompt_ms"] for row in backend)
+        cache_counts = [row["cache_n"] for row in selected if row.get("cache_n") is not None]
+        return {
+            "samples": len(selected),
+            "wall_samples": len(wall),
+            "backend_samples": len(backend),
+            "wall_input_tps": sum(row["read_n"] for row in wall) / wall_seconds if wall_seconds else None,
+            "backend_fresh_tps": 1000 * sum(row["prompt_n"] for row in backend) / prompt_ms if prompt_ms else None,
+            "median_read_n": statistics.median(row["read_n"] for row in wall) if wall else None,
+            "median_cache_n": statistics.median(cache_counts) if cache_counts else None,
+            "wall_seconds": wall_seconds,
+            "prompt_ms": prompt_ms,
+        }
+
+    report: dict[str, Any] = {}
+    for bucket in PREFILL_BUCKETS:
+        planned = [probe for probe in probes if probe["bucket"] == bucket]
+        if not planned:
+            continue
+        rows = [record for record in records if record.get("bucket") == bucket]
+        item: dict[str, Any] = {
+            "planned_repetitions": len(planned) // 2,
+            "completed_requests": len(rows),
+            "errors": sum(bool(row.get("error")) for row in rows),
+            "mixed": sum(row.get("observed_cache") == "mixed" and not row.get("error") for row in rows),
+            "unknown": sum(row.get("observed_cache") == "unknown" and not row.get("error") for row in rows),
+        }
+        for state in ("cold", "cached"):
+            item[state] = rates([row for row in rows if row.get("observed_cache") == state])
+        item["planned_cold"] = rates([row for row in rows if row.get("phase") == "cold"])
+        item["planned_repeat"] = rates([row for row in rows if row.get("phase") == "repeat"])
+        report[bucket] = item
+    return report
 
 
 def write_fixtures(
@@ -835,7 +1026,9 @@ def load_fixtures(fixture_path: Path, profile: str | None = None) -> list[dict[s
     return data["cases"]
 
 
-def resume_records(results_path: Path) -> list[dict[str, Any]]:
+def resume_records(
+    results_path: Path, required: frozenset[str] = frozenset({"id", "category", "correct"})
+) -> list[dict[str, Any]]:
     """Load records from a previous (possibly interrupted) run, safe for appending.
 
     A torn line left by a crash mid-write is dropped and the file truncated to the last
@@ -853,12 +1046,47 @@ def resume_records(results_path: Path) -> list[dict[str, Any]]:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(record, dict) and {"id", "category", "correct"} <= record.keys():
+        if isinstance(record, dict) and required <= record.keys():
             records.append(record)
             kept.append(line)
     if len(kept) != len(lines):
         results_path.write_text("".join(kept), encoding="utf-8")
     return records
+
+
+def resumed_elapsed_seconds(records: list[dict[str, Any]], summary_path: Path, run_id: str | None = None) -> float:
+    """Recover active time from checkpoints, then an older summary or request durations.
+
+    Old records have no cumulative checkpoint. Their summed request durations are the
+    closest recoverable estimate after a crash; new records preserve active wall time.
+    """
+    checkpoints = [
+        value for record in records
+        if (value := _positive_number(record.get("run_elapsed_seconds"))) is not None
+    ]
+    prior: dict[str, Any] = {}
+    if summary_path.exists():
+        try:
+            loaded = json.loads(summary_path.read_text())
+            if isinstance(loaded, dict):
+                prior = loaded
+        except (OSError, ValueError):
+            pass
+    if prior.get("run_id") != run_id and (prior.get("run_id") is not None or any(r.get("run_id") for r in records)):
+        prior = {}
+    prior_elapsed = _positive_number(prior.get("elapsed_seconds")) or 0.0
+    if checkpoints:
+        return max(max(checkpoints), prior_elapsed)
+    request_seconds = sum(_positive_number(record.get("elapsed_seconds")) or 0.0 for record in records)
+    identity = prior.get("run_identity")
+    prior_ids = set(identity.get("case_ids", [])) if isinstance(identity, dict) else set()
+    if prior_elapsed and prior_ids:
+        extra = sum(
+            _positive_number(record.get("elapsed_seconds")) or 0.0
+            for record in records if record.get("id") not in prior_ids
+        )
+        return max(request_seconds, prior_elapsed + extra)
+    return max(request_seconds, prior_elapsed)
 
 
 def select_cases(
@@ -1034,16 +1262,20 @@ def main(
         label: args.output_dir / f"results-{safe_label}.jsonl"
         for label, safe_label in zip(labels, safe_labels)
     }
+    probe_paths = {
+        label: args.output_dir / f"prefill-{safe_label}.jsonl"
+        for label, safe_label in zip(labels, safe_labels)
+    }
     for label in labels:
-        results_path = result_paths[label]
-        if not args.resume and not args.overwrite and results_path.exists():
-            recorded = sum(1 for line in results_path.read_text(encoding="utf-8").splitlines() if line.strip())
-            if recorded:
-                raise SystemExit(
-                    f"{results_path.name} already holds {recorded} recorded case(s); running without "
-                    f"--resume would discard them. Pass --resume to continue that run, --overwrite to "
-                    f"replace it, or use a different --output-dir"
-                )
+        for path in (result_paths[label], probe_paths[label]):
+            if not args.resume and not args.overwrite and path.exists():
+                recorded = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+                if recorded:
+                    raise SystemExit(
+                        f"{path.name} already holds {recorded} recorded case(s); running without "
+                        f"--resume would discard them. Pass --resume to continue that run, --overwrite to "
+                        f"replace it, or use a different --output-dir"
+                    )
 
     fixture_path = args.output_dir / "fixtures.json"
     if args.make_fixtures or not fixture_path.exists():
@@ -1055,6 +1287,8 @@ def main(
     if len(set(all_case_ids)) != len(all_case_ids):
         raise SystemExit("fixtures.json contains duplicate case ids")
     fixtures = select_cases(all_fixtures, categories=args.categories, limit=args.limit)
+    full_probes = prefill_probes(all_fixtures, profile)
+    active_probes = prefill_probes(fixtures, profile)
     if len(fixtures) != len(all_fixtures):
         parts = [f"running {len(fixtures)} of {len(all_fixtures)} fixtures"]
         if args.categories:
@@ -1069,6 +1303,10 @@ def main(
     for label, model in zip(labels, models):
         results_path = result_paths[label]
         records = resume_records(results_path) if args.resume else []
+        probe_records = (
+            resume_records(probe_paths[label], frozenset({"id", "bucket", "phase"}))
+            if args.resume else []
+        )
         seen_ids = {record["id"] for record in records}
         if len(seen_ids) != len(records):
             raise SystemExit(f"{results_path.name} contains duplicate case ids; refusing an ambiguous resume")
@@ -1079,10 +1317,49 @@ def main(
                 f"(e.g. {', '.join(unknown[:3])}); the fixtures changed — run without --resume "
                 f"or delete the results file"
             )
+        probe_ids = {record["id"] for record in probe_records}
+        if len(probe_ids) != len(probe_records):
+            raise SystemExit(f"{probe_paths[label].name} contains duplicate probe ids")
+        unknown_probes = probe_ids - {probe["id"] for probe in full_probes}
+        if unknown_probes:
+            raise SystemExit(f"{probe_paths[label].name} contains probes absent from the current fixtures")
+        probe_prompts = {
+            probe["id"]: hashlib.sha256(probe["prompt"].encode()).hexdigest()
+            for probe in full_probes
+        }
+        if any(record.get("prompt_sha256") != probe_prompts[record["id"]] for record in probe_records):
+            raise SystemExit(
+                f"{probe_paths[label].name} was recorded with different probe prompts; "
+                "use a different --output-dir or --overwrite"
+            )
+        summary_path = args.output_dir / f"summary-{model_filename(label)}.json"
+        existing_run_ids = {record["run_id"] for record in records + probe_records if record.get("run_id")}
+        if len(existing_run_ids) > 1:
+            raise SystemExit(f"{label} has records from multiple run ids; refusing an ambiguous resume")
+        run_id = next(iter(existing_run_ids), None)
+        if run_id is None and args.resume and summary_path.exists():
+            try:
+                previous_summary = json.loads(summary_path.read_text())
+            except (OSError, ValueError):
+                previous_summary = {}
+            if isinstance(previous_summary, dict):
+                previous_identity = previous_summary.get("run_identity")
+                previous_ids = previous_identity.get("case_ids") if isinstance(previous_identity, dict) else None
+                if previous_ids and set(previous_ids) <= seen_ids:
+                    run_id = previous_summary.get("run_id")
+        if run_id is None:
+            run_id = str(uuid.uuid4())
         states[label] = {
             "path": results_path,
             "records": records,
             "seen": frozenset(seen_ids),
+            "probe_records": probe_records,
+            "probe_seen": frozenset(probe_ids),
+            "elapsed_offset": (
+                resumed_elapsed_seconds(records + probe_records, summary_path, run_id)
+                if args.resume else 0.0
+            ),
+            "run_id": run_id,
             "model": model,
         }
     mode = "a" if args.resume else "w"
@@ -1091,6 +1368,9 @@ def main(
         outputs = {
             label: stack.enter_context(states[label]["path"].open(mode, encoding="utf-8")) for label in labels
         }
+        probe_outputs = {
+            label: stack.enter_context(probe_paths[label].open(mode, encoding="utf-8")) for label in labels
+        } if full_probes else {}
         if len(models) == 1:
             model = models[0]
             label = labels[0]
@@ -1108,6 +1388,9 @@ def main(
                 concurrency=args.concurrency,
                 api_key=api_keys[0],
                 label=label,
+                started_at=started,
+                elapsed_offset=states[label]["elapsed_offset"],
+                run_id=states[label]["run_id"],
             )
         else:
             print(
@@ -1128,9 +1411,34 @@ def main(
                 send_reasoning_effort=not args.no_reasoning_effort,
                 api_keys=api_keys,
                 labels=labels,
+                started_at=started,
+                elapsed_offsets={label: states[label]["elapsed_offset"] for label in labels},
+                run_ids={label: states[label]["run_id"] for label in labels},
             )
             for label in labels:
                 states[label]["records"] = states[label]["records"] + new_records[label]
+        # Each pair is adjacent for one deployment, even during an A/B interleave.
+        # A resumed record is skipped, while a missing partner is requested again.
+        for index in range(0, len(active_probes), 2):
+            pair = active_probes[index:index + 2]
+            for label, model, base_url, api_key in zip(labels, models, base_urls, api_keys):
+                for probe in pair:
+                    if probe["id"] in states[label]["probe_seen"]:
+                        continue
+                    record = _process_prefill_probe(
+                        base_url, model, probe, timeout=timeout, retry_delay=retry_delay,
+                        tolerate_errors=tolerate_errors, send_seed=not args.no_seed,
+                        send_reasoning_effort=not args.no_reasoning_effort, api_key=api_key,
+                    )
+                    record["run_elapsed_seconds"] = states[label]["elapsed_offset"] + time.monotonic() - started
+                    record["run_id"] = states[label]["run_id"]
+                    probe_outputs[label].write(json.dumps(record, ensure_ascii=False) + "\n")
+                    probe_outputs[label].flush()
+                    states[label]["probe_records"].append(record)
+                    print(
+                        f"{label} prefill {probe['bucket']} {probe['repetition']}/{PREFILL_REPETITIONS} "
+                        f"{probe['phase']} observed={record['observed_cache']}", flush=True,
+                    )
     # The summary covers every record, resumed ones included.
     full_fixtures_sha256 = cases_sha256(all_fixtures)
     for label in labels:
@@ -1138,18 +1446,26 @@ def main(
         records = states[label]["records"]
         recorded_ids = {record["id"] for record in records}
         recorded_cases = [case for case in all_fixtures if case["id"] in recorded_ids]
+        recorded_probe_ids = {record["id"] for record in states[label]["probe_records"]}
+        recorded_probes = [probe for probe in full_probes if probe["id"] in recorded_probe_ids]
         summary = summarize(records)
+        summary["prefill_by_length"] = summarize_prefill(
+            prefill_probes(recorded_cases, profile), states[label]["probe_records"]
+        )
         summary.update(
             {
                 "model": model,
                 "label": label,
-                "elapsed_seconds": time.monotonic() - started,
+                "run_id": states[label]["run_id"],
+                "elapsed_seconds": states[label]["elapsed_offset"] + time.monotonic() - started,
                 "run_identity": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "profile": profile,
                     "fixtures_sha256": full_fixtures_sha256,
                     "selection_sha256": cases_sha256(recorded_cases),
                     "case_ids": [case["id"] for case in recorded_cases],
+                    "probe_sha256": cases_sha256(full_probes),
+                    "probe_selection_sha256": cases_sha256(recorded_probes),
                     "request_options": {
                         "temperature": 0,
                         "top_p": 1,

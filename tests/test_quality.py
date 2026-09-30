@@ -138,13 +138,106 @@ class SummaryTests(unittest.TestCase):
         self.assertAlmostEqual(stats["accuracy_excluding_errors"], 0.5)
         self.assertEqual(stats["truncated"], 0)
         self.assertAlmostEqual(stats["median_elapsed_seconds"], 2.0)
-        self.assertIsNone(stats["median_prefill_tps"])
+        self.assertNotIn("median_prefill_tps", stats)
         self.assertIsNone(stats["median_decode_tps"])
 
     def test_all_errors_have_no_quality_accuracy(self):
         summary = qc.summarize([self.make_records()[-1]])
         self.assertIsNone(summary["accuracy_excluding_errors"])
         self.assertIsNone(summary["by_category"]["gsm8k"]["accuracy_excluding_errors"])
+
+    def test_no_global_prefill_median(self):
+        self.assertNotIn("median_prefill_tps", qc.summarize(self.make_records()))
+
+
+class PrefillTests(unittest.TestCase):
+    def test_three_distinct_pairs_per_available_length(self):
+        fixtures = [
+            {"category": "gsm8k", "prompt": "short"},
+            {"category": "long_context_16k", "prompt": "archive 16k"},
+            {"category": "long_context_180k", "prompt": "archive 180k"},
+        ]
+        probes = qc.prefill_probes(fixtures, "expanded")
+        self.assertEqual(len(probes), 18)
+        for bucket in ("<512", "16K", "180K/262K"):
+            rows = [probe for probe in probes if probe["bucket"] == bucket]
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(len({probe["prompt"] for probe in rows}), 3)
+            for index in range(0, 6, 2):
+                self.assertEqual(rows[index]["prompt"], rows[index + 1]["prompt"])
+                self.assertEqual((rows[index]["phase"], rows[index + 1]["phase"]), ("cold", "repeat"))
+
+    def test_extracts_actual_tokens_cache_and_backend_time(self):
+        probe = qc.prefill_probes([{"category": "gsm8k", "prompt": "q"}], "express")[0]
+        response = {
+            "choices": [{"message": {"content": "OK"}}],
+            "usage": {"prompt_tokens": 120, "prompt_tokens_details": {"cached_tokens": 20}},
+            "timings": {"prompt_n": 100, "cache_n": 20, "prompt_ms": 500},
+        }
+        with mock.patch.object(qc, "request", return_value=response):
+            record = qc._process_prefill_probe(
+                "http://x", "m", probe, timeout=1, retry_delay=0,
+                tolerate_errors=True, send_seed=True, send_reasoning_effort=True, api_key=None,
+            )
+        self.assertEqual((record["prompt_n"], record["cache_n"], record["read_n"]), (100, 20, 120))
+        self.assertEqual(record["prompt_ms"], 500)
+        self.assertEqual(record["observed_cache"], "mixed")
+        self.assertGreater(record["wall_seconds"], 0)
+
+    def test_sustained_rates_use_all_three_samples_in_each_state(self):
+        probes = qc.prefill_probes([{"category": "gsm8k", "prompt": "q"}], "express")
+        records = []
+        for probe in probes:
+            cached = probe["phase"] == "repeat"
+            records.append({
+                "id": probe["id"], "bucket": "<512", "phase": probe["phase"],
+                "observed_cache": "cached" if cached else "cold", "error": None,
+                "read_n": 100, "prompt_n": 10 if cached else 100,
+                "cache_n": 90 if cached else 0,
+                "prompt_ms": 100 if cached else 1000,
+                "wall_seconds": 0.5 if cached else 2.0,
+            })
+        stats = qc.summarize_prefill(probes, records)["<512"]
+        self.assertEqual(stats["planned_repetitions"], 3)
+        self.assertEqual(stats["cold"]["samples"], 3)
+        self.assertEqual(stats["cached"]["samples"], 3)
+        self.assertAlmostEqual(stats["cold"]["wall_input_tps"], 50)
+        self.assertAlmostEqual(stats["cached"]["wall_input_tps"], 200)
+        self.assertAlmostEqual(stats["cold"]["backend_fresh_tps"], 100)
+        self.assertAlmostEqual(stats["cached"]["backend_fresh_tps"], 100)
+
+    def test_standard_usage_still_yields_wall_rate_without_cache_telemetry(self):
+        probe = qc.prefill_probes([{"category": "gsm8k", "prompt": "q"}], "express")[0]
+        response = {"choices": [{"message": {"content": "OK"}}], "usage": {"prompt_tokens": 100}}
+        with mock.patch.object(qc, "request", return_value=response):
+            record = qc._process_prefill_probe(
+                "http://x", "m", probe, timeout=1, retry_delay=0,
+                tolerate_errors=True, send_seed=True, send_reasoning_effort=True, api_key=None,
+            )
+        stats = qc.summarize_prefill([probe], [record])["<512"]
+        self.assertEqual(record["observed_cache"], "unknown")
+        self.assertEqual(stats["cold"]["samples"], 0)
+        self.assertEqual(stats["planned_cold"]["wall_samples"], 1)
+        self.assertIsNone(stats["planned_cold"]["backend_fresh_tps"])
+
+    def test_torn_probe_record_is_retried_on_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prefill-m.jsonl"
+            path.write_text('{"id":"p1","bucket":"<512","phase":"cold"}\n{"id":"p2"')
+            rows = qc.resume_records(path, frozenset({"id", "bucket", "phase"}))
+            self.assertEqual([row["id"] for row in rows], ["p1"])
+            self.assertEqual(len(path.read_text().splitlines()), 1)
+
+    def test_malformed_probe_response_is_an_error_not_a_speed_sample(self):
+        probe = qc.prefill_probes([{"category": "gsm8k", "prompt": "q"}], "express")[0]
+        with mock.patch.object(qc, "request", return_value={"choices": [None], "usage": {"prompt_tokens": 100}}):
+            record = qc._process_prefill_probe(
+                "http://x", "m", probe, timeout=1, retry_delay=0,
+                tolerate_errors=True, send_seed=True, send_reasoning_effort=True, api_key=None,
+            )
+        self.assertIsNotNone(record["error"])
+        self.assertEqual(qc.summarize_prefill([probe], [record])["<512"]["errors"], 1)
+        self.assertIsNone(qc.summarize_prefill([probe], [record])["<512"]["planned_cold"]["wall_input_tps"])
 
 
 class FilenameTests(unittest.TestCase):
@@ -368,6 +461,38 @@ class CompareTests(unittest.TestCase):
         b = self.make_summary("b", 0.5, 10.0)
         del b["run_identity"]["selection_sha256"]
         self.assertTrue(cq.compatibility_issues(a, b))
+
+    def test_new_summaries_compare_probe_selection(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        for summary in (a, b):
+            summary["run_identity"].update({
+                "schema_version": 2,
+                "probe_sha256": "probe-set",
+                "probe_selection_sha256": "all-probes",
+            })
+        self.assertEqual(cq.compatibility_issues(a, b), [])
+        b["run_identity"]["probe_selection_sha256"] = "incomplete"
+        self.assertTrue(cq.compatibility_issues(a, b))
+
+    def test_comparison_reports_bucket_rates_without_global_prefill(self):
+        a = self.make_summary("a", 0.5, 10.0)
+        b = self.make_summary("b", 0.5, 10.0)
+        for summary, rate in ((a, 100.0), (b, 150.0)):
+            summary["median_prefill_tps"] = 9999.0
+            summary["prefill_by_length"] = {
+                "16K": {"cold": {"samples": 3, "wall_input_tps": rate, "backend_fresh_tps": rate}}
+            }
+        report = cq.render("a", a, "b", b)
+        self.assertIn("16K", report)
+        self.assertIn("cold wall input t/s", report)
+        self.assertNotIn("9999", report)
+        data = cq.as_json("a", a, "b", b)
+        self.assertAlmostEqual(data["delta_prefill_by_length"]["16K"]["cold"]["wall_input_tps"], 50)
+        self.assertNotIn("median_prefill_tps", data["a"])
+        a["prefill_by_length"]["16K"].update({"unknown": 3, "planned_repeat": {"wall_input_tps": 80.0}})
+        b["prefill_by_length"]["16K"].update({"unknown": 3, "planned_repeat": {"wall_input_tps": 90.0}})
+        self.assertIn("planned_repeat wall t/s", cq.render("a", a, "b", b))
 
 
 class RequestPayloadTests(unittest.TestCase):
@@ -976,6 +1101,79 @@ class NoUsableChoiceTests(unittest.TestCase):
         # An older results file being resumed can carry the key explicitly null.
         records = [{"id": "a", "category": "gsm8k", "correct": True, "timings": None}]
         self.assertIsNone(qc.summarize(records)["median_decode_tps"])
+
+
+class PrefillMainTests(unittest.TestCase):
+    def test_probe_records_are_separate_and_resume_preserves_elapsed_time(self):
+        fixtures = [{
+            "id": "arc_00", "category": "arc_challenge", "prompt": "Choose A.",
+            "expected": "A", "max_tokens": 32,
+        }]
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            calls = []
+
+            def fake_request(base_url, model, case, **kwargs):
+                calls.append(case["id"])
+                cached = case.get("phase") == "repeat"
+                return {
+                    "choices": [{"message": {"content": "Answer: A."}}],
+                    "usage": {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 90 if cached else 0}},
+                    "timings": {"prompt_n": 10 if cached else 100, "cache_n": 90 if cached else 0,
+                                "prompt_ms": 100 if cached else 1000},
+                }
+
+            argv = ["prog", "--model", "m", "--output-dir", str(out_dir)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(qc, "request", side_effect=fake_request), \
+                    mock.patch("sys.stdout", io.StringIO()):
+                qc.main(lambda: fixtures, timeout=1, retry_delay=0, tolerate_errors=True,
+                        description="t", profile="express")
+            self.assertEqual(len(calls), 7)  # one scored case plus three cold/repeat pairs
+            self.assertEqual(len((out_dir / "results-m.jsonl").read_text().splitlines()), 1)
+            probes = [json.loads(line) for line in (out_dir / "prefill-m.jsonl").read_text().splitlines()]
+            self.assertEqual(len(probes), 6)
+            self.assertTrue(all(record["read_n"] == 100 for record in probes))
+            self.assertTrue(all(record["prompt_sha256"] for record in probes))
+            first_summary = json.loads((out_dir / "summary-m.json").read_text())
+            self.assertEqual(first_summary["total"], 1)
+            self.assertEqual(first_summary["prefill_by_length"]["<512"]["cached"]["samples"], 3)
+            self.assertEqual(first_summary["run_identity"]["schema_version"], 2)
+            self.assertGreater(first_summary["elapsed_seconds"], 0)
+
+            with mock.patch.object(sys, "argv", argv + ["--resume"]), \
+                    mock.patch.object(qc, "request", side_effect=AssertionError("already recorded")), \
+                    mock.patch("sys.stdout", io.StringIO()):
+                qc.main(lambda: fixtures, timeout=1, retry_delay=0, tolerate_errors=True,
+                        description="t", profile="express")
+            resumed = json.loads((out_dir / "summary-m.json").read_text())
+            self.assertGreaterEqual(resumed["elapsed_seconds"], first_summary["elapsed_seconds"])
+            self.assertEqual(resumed["run_id"], first_summary["run_id"])
+            self.assertEqual(len((out_dir / "prefill-m.jsonl").read_text().splitlines()), 6)
+
+            probes[0]["prompt_sha256"] = "wrong-prompt"
+            (out_dir / "prefill-m.jsonl").write_text(
+                "".join(json.dumps(record) + "\n" for record in probes)
+            )
+            with mock.patch.object(sys, "argv", argv + ["--resume"]), self.assertRaises(SystemExit):
+                qc.main(lambda: fixtures, timeout=1, retry_delay=0, tolerate_errors=True,
+                        description="t", profile="express")
+
+    def test_elapsed_recovery_uses_legacy_request_time_and_new_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary-m.json"
+            records = [{"id": "a", "elapsed_seconds": 2.0}, {"id": "b", "elapsed_seconds": 3.0}]
+            self.assertEqual(qc.resumed_elapsed_seconds(records, summary), 5.0)
+            summary.write_text(json.dumps({
+                "elapsed_seconds": 7.0,
+                "run_identity": {"case_ids": ["a"]},
+            }))
+            self.assertEqual(qc.resumed_elapsed_seconds(records, summary), 10.0)
+            records[-1]["run_elapsed_seconds"] = 11.0
+            self.assertEqual(qc.resumed_elapsed_seconds(records, summary), 11.0)
+            records[-1]["run_id"] = "new-run"
+            self.assertEqual(qc.resumed_elapsed_seconds(records, summary, "new-run"), 11.0)
+            del records[-1]["run_elapsed_seconds"]
+            self.assertEqual(qc.resumed_elapsed_seconds(records, summary, "new-run"), 5.0)
 
 
 class FixtureHeaderTests(unittest.TestCase):

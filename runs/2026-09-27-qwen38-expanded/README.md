@@ -3,12 +3,15 @@
 266 identical text cases, `temperature=0`, seed 20260926, concurrency 1. All runs used
 the same fixtures. Accuracy includes request errors in the denominator.
 
-| Model and quant | Inference and hardware | Accuracy | Prefill | Decode | Time |
-|---|---|---:|---:|---:|---:|
-| Qwen3.8 27B **NVFP4** | NInfer TP2, MTP; **2× RTX 5060 Ti 16 GB** | 242/266 (**90.98%**) | **706.3 tok/s** | **95.1 tok/s** | **22:58** |
-| Qwen3.8 27B **Q8_0 GGUF** | llama.cpp v0.4.0, MTP, tensor split; **RTX 4080 SUPER 16 GB + 2× RTX 5060 Ti 16 GB** | 243/266 (**91.35%**) | 202.3 tok/s | 81.2 tok/s | 31:59 |
-| Qwen3.8 27B **GSQ-RCO IQ3_S** | llama.cpp v0.4.0, MTP; **RTX 4080 SUPER 16 GB** | 239/266 (**89.85%**) | 244.4 tok/s | 93.3 tok/s | 20:19 |
-| Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | llama.cpp PR 28243, MoE, MTP, CPU offload; **RTX 4080 SUPER 16 GB + 2× RTX 5060 Ti 16 GB** | **246/266 (92.48%)** | 39.3 tok/s | 30.6 tok/s | 1:36:49 |
+| Model and quant | Inference and hardware | Accuracy | Backend decode | Time |
+|---|---|---:|---:|---:|
+| Qwen3.8 27B **NVFP4** | NInfer TP2, MTP; **2× RTX 5060 Ti 16 GB** | 242/266 (**90.98%**) | **95.1 tok/s** | **22:58** |
+| Qwen3.8 27B **Q8_0 GGUF** | llama.cpp v0.4.0, MTP, tensor split; **RTX 4080 SUPER 16 GB + 2× RTX 5060 Ti 16 GB** | 243/266 (**91.35%**) | 81.2 tok/s | 31:59 |
+| Qwen3.8 27B **GSQ-RCO IQ3_S** | llama.cpp v0.4.0, MTP; **RTX 4080 SUPER 16 GB** | 239/266 (**89.85%**) | 93.3 tok/s | 20:19 |
+| Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | llama.cpp PR 28243, MoE, MTP, CPU offload; **RTX 4080 SUPER 16 GB + 2× RTX 5060 Ti 16 GB** | **246/266 (92.48%)** | 30.6 tok/s | 1:36:49 |
+
+These historical runs have one request per long input length. Their overall prefill
+medians are dominated by short prompts, so they are not shown as sustained prefill.
 
 Shared host: AMD Ryzen 9 5900X, NVIDIA driver 595.91.07. The GGUF runs used Q8_0 KV cache;
 NVFP4 used INT8 KV cache. This compares complete serving configurations, not quantization

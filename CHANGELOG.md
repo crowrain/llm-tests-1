@@ -8,6 +8,20 @@ can be checked out and diffed.
 
 ## Unreleased
 
+### Prefill measurement
+
+- Added three distinct cold candidates and three immediate repeat candidates per selected
+  input length. Probes are stored separately from the 72/266 scored quality cases, so
+  existing accuracy denominators and fixture identities stay intact.
+- Probe records retain actual prompt tokens, fresh and cached token counts, backend
+  prompt time, and request wall time. Summaries separate observed cold/cached rates by
+  length and keep planned-pair rates when cache telemetry is absent.
+- The aggregate prefill median is no longer a headline speed in summaries, comparisons
+  or the published results tables. Comparison reports wall-clock input throughput and
+  backend fresh-token prefill separately for each length and cache state.
+- Resumed runs now accumulate active `elapsed_seconds` using per-record checkpoints;
+  older result files fall back to their previous summary or recorded request durations.
+
 ### Integrity and safety fixes
 
 - Fixture replacement now runs only after the existing-results preflight, so a rejected
