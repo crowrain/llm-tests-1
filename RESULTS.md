@@ -27,7 +27,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 184,8 | нет данных | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | нет данных | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | нет данных | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
-| 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 252/266 (94,74%) | 🟩 97/100 | 🟩 98/100 | 🟨 41/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 9 | 91,4 | 1112,7 / 1126,3 / 1110,4 / 1077,5 | 50:17⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
+| 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 260/266 (97,74%) | 🟩 98/100 | 🟩 98/100 | 🟩 48/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 92,1 | 1111,2 / 1125,0 / 1109,7 / 1073,9 | 51:20⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/summary-qwen38-flashnext-iq3xxs-strata-4096.json) · [prefill](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/prefill-qwen38-flashnext-iq3xxs-strata-4096.jsonl) |
 ### Повторная оценка MMLU: Qwen3.8 27B NVFP4
 
 Оценка MMLU в строке выше заменена результатом отдельного прогона 50 вопросов с
@@ -79,10 +79,11 @@ DeepSeek восемь ответов завершились по лимиту г
 ⁷ У Qwen3.8 Flash Next восемь ответов MMLU усечены; ошибок сервера не было.
 ⁸ У Ling Flash усечён 21 ответ, 19 остались пустыми. Запрос с контекстом 180k
 завершился HTTP 502 после повторных попыток; запросы на 16k, 64k и 128k прошли.
-⁹ У Strata установлен лимит контекста 262 144 токена; задания 16k, 64k, 128k и
-180k пройдены. Усечены 8 ответов MMLU и 1 GSM8K. Сводка schema v2 включает 30
-отдельных cold/cached prefill-проб: cold backend — 1112,7 ток/с на 16k, 1126,3
-на 64k, 1110,4 на 128k и 1077,5 на 182k. Время включает scored-часть и эти пробы.
+⁹ Обновлённый прогон Strata выполнен с `max_tokens=4096`; усечений, пустых ответов
+и ошибок нет, шесть ответов завершены, но неверны. Лимит контекста — 262 144 токена;
+задания 16k, 64k, 128k и 180k пройдены. Сводка schema v2 включает 30 отдельных
+cold/cached prefill-проб: cold backend — 1111,2 ток/с на 16k, 1125,0 на 64k, 1109,7
+на 128k и 1073,9 на 182k. Время включает scored-часть и эти пробы.
 ¹⁰ Для NInfer NVFP4 scored-ответы из прогона 2026-09-27 не пересчитывались; 30
 prefill-проб проведены 2026-09-30 (по три cold и cached на длину, все без ошибок).
 Время — сумма активного времени обеих частей; prefill-замеры — cold backend rates.
