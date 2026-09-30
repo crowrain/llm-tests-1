@@ -134,9 +134,11 @@ Empty positions are preserved, so a mixed public/authenticated pair can use
 
 Every request is sent with `temperature=0`, `top_p=1`, `seed=20260926` and
 `reasoning_effort="medium"` (the last two unless disabled above); per-case
-`max_completion_tokens` come from the fixture. Requests reuse a keep-alive TCP
-connection per endpoint, so a run pays the handshake once, not once per case; a
-dead or closed connection is dropped and reconnected on retry.
+`max_completion_tokens` come from the fixture. New scored fixtures use 4096 for every
+category; existing `fixtures.json` files retain their original limits until rebuilt in a
+new output directory. Prefill probes keep a one-token limit independently. Requests reuse
+a keep-alive TCP connection per endpoint, so a run pays the handshake once, not once per
+case; a dead or closed connection is dropped and reconnected on retry.
 
 ### Output
 
