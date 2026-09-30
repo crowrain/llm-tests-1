@@ -29,6 +29,16 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | нет данных | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 | 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 252/266 (94,74%) | 🟩 97/100 | 🟩 98/100 | 🟨 41/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 9 | 91,4 | 1112,7 / 1126,3 / 1110,4 / 1077,5 | 50:17⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
 
+### Отдельный повтор MMLU: Qwen3.8 27B NVFP4
+
+Это отдельный прогон только 50 MMLU-вопросов, не полный профиль из 266 заданий;
+его результат не подменяет оценку MMLU в строке полного теста выше. Для завершения
+reasoning установлен лимит `max_tokens=4096`.
+
+| Дата | Модель и платформа | Верно | Усечено / пусто | Decode, ток/с | Prefill cold / cached, ток/с (62 токена) | Время | Сводка |
+|---|---|---:|---:|---:|---:|---:|---|
+| 2026-09-30 | Qwen3.8 27B **NVFP4**; 2× RTX 5060 Ti, NInfer TP2 | 🟩 49/50 (98%) | 🟩 0 / 0 | 88,7 | 458,6 / 7102,0¹¹ | 6:49 | [JSON](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) · [prefill](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/prefill-qwen38-ninfer-nvfp4-mmlu-4096.jsonl) |
+
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
 Хост `MS-S1 MAX` на базе **AMD Ryzen AI MAX+ 395**: 16 ядер / 32 потока,
@@ -76,6 +86,8 @@ DeepSeek восемь ответов завершились по лимиту г
 ¹⁰ Для NInfer NVFP4 scored-ответы из прогона 2026-09-27 не пересчитывались; 30
 prefill-проб проведены 2026-09-30 (по три cold и cached на длину, все без ошибок).
 Время — сумма активного времени обеих частей; prefill-замеры — cold backend rates.
+¹¹ Prefill здесь измерен отдельным коротким 62-токенным пробником; cached-скорость
+не характеризует обработку нового текста и не сопоставима с cold prefill.
 
 ## Как добавить результат
 
