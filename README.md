@@ -211,8 +211,10 @@ intentional.
 
 ## Published benchmark results
 
-The [results page](RESULTS.md) collects expanded-profile runs in one table, with hardware,
-quantization, category scores and links to machine-readable summaries. The earlier
+The [results page](RESULTS.md) collects expanded-profile runs by hardware platform, with
+hardware, quantization, category scores, decode speed, length-specific cold prefill rates
+and links to machine-readable summaries. Always publish prefill alongside decode; do not
+replace per-length rates with one mixed-length median. The earlier
 [Qwen3.8 comparison](runs/2026-09-27-qwen38-expanded/README.md) has more detail on
 those deployments.
 
