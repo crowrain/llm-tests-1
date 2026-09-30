@@ -4,9 +4,10 @@
 100 ARC-Challenge, 50 MMLU, 12 заданий на JSON и 4 поиска в длинном контексте).
 Все запуски используют один набор заданий, `temperature=0`, `seed=20260926`,
 `reasoning_effort=medium` и concurrency 1. Процент верных ответов считается от
-всех 266 заданий, включая ошибки сервера и усечённые ответы. Это исторические
-прогоны без трёх повторений prefill для каждой длины, поэтому общая медиана
-prefill из старых сводок здесь не используется как показатель sustained prefill.
+всех 266 заданий, включая ошибки сервера и усечённые ответы. Для старых прогонов
+без трёх повторений prefill на каждой длине общая медиана prefill не используется
+как показатель sustained throughput; свежая сводка Strata содержит отдельные
+cold/cached-замеры по длинам.
 
 ## Ryzen 9 5900X + дискретные NVIDIA GPU
 
@@ -26,7 +27,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27 | Qwen3.6 35B-A3B UD **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟥 114/266 (42,86%)¹ | 🟥 19/100 | 🟨 79/100 | 🟥 12/50 | 🟥 0/12 | 🟩 4/4 | 🟩 0 / 🟥 155 | 184,8 | 20:54 | [JSON](runs/2026-09-27-qwen36-q4km-expanded/summary-qwen36-35b-a3b-q4km-moe-mtp.json) |
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
-| 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP | 🟩 248/266 (93,23%) | 🟩 97/100 | 🟩 97/100 | 🟨 41/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟨 8 | 93,5 | 27:10⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
+| 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 252/266 (94,74%) | 🟩 97/100 | 🟩 98/100 | 🟨 41/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 9 | 91,4 | 50:17⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-expanded/summary-qwen38-flashnext-iq3xxs-strata.json) |
 
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
@@ -67,10 +68,10 @@ DeepSeek восемь ответов завершились по лимиту г
 ⁷ У Qwen3.8 Flash Next восемь ответов MMLU усечены; ошибок сервера не было.
 ⁸ У Ling Flash усечён 21 ответ, 19 остались пустыми. Запрос с контекстом 180k
 завершился HTTP 502 после повторных попыток; запросы на 16k, 64k и 128k прошли.
-⁹ У Strata установлен лимит контекста 65 536 токенов: задания 64k, 128k и 180k
-вернули HTTP 400, поскольку вход вместе с резервом генерации превышает лимит; 16k
-пройдено. Усечены 7 ответов MMLU и 1 ARC. Время — сумма активной длительности двух
-частей одного возобновлённого прогона.
+⁹ У Strata установлен лимит контекста 262 144 токена; задания 16k, 64k, 128k и
+180k пройдены. Усечены 8 ответов MMLU и 1 GSM8K. Сводка schema v2 включает 30
+отдельных cold/cached prefill-проб: cold backend — 1112,7 ток/с на 16k, 1126,3
+на 64k, 1110,4 на 128k и 1077,5 на 182k. Время включает scored-часть и эти пробы.
 
 ## Как добавить результат
 
