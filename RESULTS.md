@@ -6,8 +6,8 @@
 `reasoning_effort=medium` и concurrency 1. Процент верных ответов считается от
 всех 266 заданий, включая ошибки сервера и усечённые ответы. Для старых прогонов
 без трёх повторений prefill на каждой длине общая медиана prefill не используется
-как показатель sustained throughput; свежая сводка Strata содержит отдельные
-cold/cached-замеры по длинам.
+как показатель sustained throughput; в новых прогонах cold prefill приводится
+отдельно по длинам, cached-замеры сохранены в JSONL.
 
 ## Ryzen 9 5900X + дискретные NVIDIA GPU
 
@@ -28,6 +28,13 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER; llama.cpp, MTP | 🟨 239/266 (89,85%)² | 🟩 96/100 | 🟩 97/100 | 🟨 33/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟥 19 | 93,3 | нет данных | 20:19 | [JSON](runs/2026-09-27-qwen38-gsq-rco-expanded/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super.json) |
 | 2026-09-27 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP, CPU offload | 🟩 246/266 (92,48%)³ | 🟩 97/100 | 🟩 96/100 | 🟨 38/50 | 🟩 11/12 | 🟩 4/4 | 🟨 2 / 🟥 11 | 30,6 | нет данных | 1:36:49 | [JSON](runs/2026-09-27-qwen38-flashnext-expanded/summary-qwen38-flashnext-125b-q4kxl-moe-mtp-cpuoffload.json) |
 | 2026-09-30 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER only; Strata, MoE, MTP, контекст 262k | 🟩 260/266 (97,74%) | 🟩 98/100 | 🟩 98/100 | 🟩 48/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 92,1 | 1111,2 / 1125,0 / 1109,7 / 1073,9 | 51:20⁹ | [JSON](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/summary-qwen38-flashnext-iq3xxs-strata-4096.json) · [prefill](runs/2026-09-30-qwen38-flashnext-iq3xxs-strata-4096/prefill-qwen38-flashnext-iq3xxs-strata-4096.jsonl) |
+| 2026-09-30 | Qwen3.6 35B-A3B Uncensored **Q4_K_M** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MoE, MTP | 🟩 249/266 (93,61%) | 🟩 96/100 | 🟩 95/100 | 🟨 43/50 | 🟨 11/12 | 🟩 4/4 | 🟥 0 / 🟥 9 | 140,4 | 6021,6 / 5537,0 / 4688,1 / 4155,4 | 43:55¹³ | [JSON](runs/2026-09-30-qwen36-uncensored-q4km-4096/summary-qwen36-35b-uncensored-q4km-4080-2x5060ti-4096.json) · [prefill](runs/2026-09-30-qwen36-uncensored-q4km-4096/prefill-qwen36-35b-uncensored-q4km-4080-2x5060ti-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 27B **GSQ-RCO IQ3_S** | RTX 4080 SUPER only; llama.cpp, MTP, контекст 49 152 | 🟩 257/266 (96,62%)¹⁴ | 🟩 98/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟥 1/4 | 🟨 3 / 🟩 0 | 93,1 | 1589,3 / — / — / — | 27:24 | [JSON](runs/2026-10-01-qwen38-gsq-rco-iq3s-4096/summary-qwen38-27b-gsq-rco-iq3s-mtp-4080super-4096.json) · [prefill](runs/2026-10-01-qwen38-gsq-rco-iq3s-4096/prefill-qwen38-27b-gsq-rco-iq3s-mtp-4080super-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 27B OneDev **Q5_K_XL** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 257/266 (96,62%) | 🟩 98/100 | 🟩 97/100 | 🟨 48/50 | 🟨 10/12 | 🟩 4/4 | 🟩 0 / 🟨 1 | 52,6 | 1494,2 / 1302,1 / 1080,6 / 944,6 | 1:00:11 | [JSON](runs/2026-10-01-qwen38-onedev-q5kxl-4096/summary-qwen38-27b-onedev-q5kxl-4096.json) · [prefill](runs/2026-10-01-qwen38-onedev-q5kxl-4096/prefill-qwen38-27b-onedev-q5kxl-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 27B **Q8_0** (vision, MTP, tensor) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 260/266 (97,74%) | 🟩 97/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟨 1 | 80,1 | 1210,2 / 1065,7 / 897,1 / 793,4 | 57:35 | [JSON](runs/2026-10-01-qwen38-q8-expanded-4096/summary-qwen38-27b-q8-vision-mtp-tensor-4096.json) · [prefill](runs/2026-10-01-qwen38-q8-expanded-4096/prefill-qwen38-27b-q8-vision-mtp-tensor-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 27B **Q5_K_XL** (vision, MTP) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 261/266 (98,12%) | 🟩 98/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 94,1 | 1134,0 / 1013,3 / 858,9 / 763,9 | 54:25 | [JSON](runs/2026-10-01-qwen38-q5kxl-vision-4096/summary-qwen38-27b-q5kxl-vision-mtp-4096.json) · [prefill](runs/2026-10-01-qwen38-q5kxl-vision-4096/prefill-qwen38-27b-q5kxl-vision-mtp-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 27B Uncensored **Q6_K** (vision, MTP) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 259/266 (97,37%) | 🟩 96/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟨 2 | 92,5 | 1088,7 / 969,7 / 828,2 / 738,7 | 57:33 | [JSON](runs/2026-10-01-qwen38-q6k-uncensored-4096/summary-qwen38-27b-uncensored-q6k-vision-mtp-4096.json) · [prefill](runs/2026-10-01-qwen38-q6k-uncensored-4096/prefill-qwen38-27b-uncensored-q6k-vision-mtp-4096.jsonl) |
+| 2026-10-01 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** (MoE, MTP, CPU offload) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 256/266 (96,24%)¹⁵ | 🟩 97/100 | 🟩 97/100 | 🟨 46/50 | 🟩 12/12 | 🟩 4/4 | 🟨 2 / 🟩 0 | 30,8 | 238,0 / 220,4 / 204,7 / 194,0 | 3:16:19 | [JSON](runs/2026-10-01-qwen38-flashnext-q4kxl-4096/summary-qwen38-flashnext-125b-q4kxl-cpuoffload-4096.json) · [prefill](runs/2026-10-01-qwen38-flashnext-q4kxl-4096/prefill-qwen38-flashnext-125b-q4kxl-cpuoffload-4096.jsonl) |
 ### Повторная оценка MMLU: Qwen3.8 27B NVFP4
 
 Оценка MMLU в строке выше заменена результатом отдельного прогона 50 вопросов с
@@ -96,6 +103,14 @@ prefill-проб проведены 2026-09-30 (по три cold и cached на 
 результата на повтор от 2026-09-30 (`max_tokens=4096`); результаты GSM8K, ARC, JSON и
 длинного контекста взяты из полного прогона 2026-09-27. Сводки обоих прогонов связаны
 в таблице. Decode, длинные prefill-пробы и время относятся к полному прогону.
+¹³ У Qwen3.6 Uncensored девять ответов усечены, все девять пустые; ошибок запросов нет.
+Время включает scored-часть и 30 prefill-проб.
+¹⁴ Профиль GSQ-RCO ограничен контекстом 49 152 токена: задания 64k, 128k и 180k
+вернули HTTP 400 из-за превышения контекста. Поэтому prefill измерен только на 16k;
+длинный контекст пройден 1/4.
+¹⁵ У Flash-Next два вопроса MMLU завершились HTTP 502; прочие задания и все четыре
+длинных контекста завершились без ошибок. Decode и prefill приведены для режима
+CPU offload; prefill на 180k соответствует фактически обработанным 182 244 токенам.
 
 ## Как добавить результат
 
