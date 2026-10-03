@@ -36,6 +36,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-10-01 | Qwen3.8 27B **Q5_K_XL** (vision, MTP) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 261/266 (98,12%) | 🟩 98/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 94,1 | 1134,0 / 1013,3 / 858,9 / 763,9 | 54:25 | [JSON](runs/2026-10-01-qwen38-q5kxl-vision-4096/summary-qwen38-27b-q5kxl-vision-mtp-4096.json) · [prefill](runs/2026-10-01-qwen38-q5kxl-vision-4096/prefill-qwen38-27b-q5kxl-vision-mtp-4096.jsonl) |
 | 2026-10-01 | Qwen3.8 27B Uncensored **Q6_K** (vision, MTP) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 259/266 (97,37%) | 🟩 96/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟨 2 | 92,5 | 1088,7 / 969,7 / 828,2 / 738,7 | 57:33 | [JSON](runs/2026-10-01-qwen38-q6k-uncensored-4096/summary-qwen38-27b-uncensored-q6k-vision-mtp-4096.json) · [prefill](runs/2026-10-01-qwen38-q6k-uncensored-4096/prefill-qwen38-27b-uncensored-q6k-vision-mtp-4096.jsonl) |
 | 2026-10-01 | Qwen3.8 Flash-Next 125B-A6B **Q4_K_XL** (MoE, MTP, CPU offload) | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp | 🟩 256/266 (96,24%)¹⁵ | 🟩 97/100 | 🟩 97/100 | 🟨 46/50 | 🟩 12/12 | 🟩 4/4 | 🟨 2 / 🟩 0 | 30,8 | 238,0 / 220,4 / 204,7 / 194,0 | 3:16:19 | [JSON](runs/2026-10-01-qwen38-flashnext-q4kxl-4096/summary-qwen38-flashnext-125b-q4kxl-cpuoffload-4096.json) · [prefill](runs/2026-10-01-qwen38-flashnext-q4kxl-4096/prefill-qwen38-flashnext-125b-q4kxl-cpuoffload-4096.jsonl) |
+| 2026-10-03 | Qwen3.8 27B **EXL3 3.00 bpw** (MTP) | RTX 4080 SUPER only; ExLlamaV3 / TabbyAPI, MTP, контекст 98 304 | 🟩 257/266 (96,62%)¹⁷ | 🟩 96/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟥 2/4 | 🟨 2 / 🟨 1 | 99,3 | 1746,3 / 1419,7 / — / —¹⁷ | 26:15 | [JSON](runs/2026-10-03-qwen38-exl3-3bpw-expanded-4096/summary-qwen38-exl3-3bpw.json) · [prefill](runs/2026-10-03-qwen38-exl3-3bpw-expanded-4096/prefill-qwen38-exl3-3bpw.jsonl) |
 ### Повторная оценка MMLU: Qwen3.8 27B NVFP4
 
 Оценка MMLU в строке выше заменена результатом отдельного прогона 50 вопросов с
@@ -115,6 +116,7 @@ CPU offload; prefill на 180k соответствует фактически �
 ¹⁶ Для Strata на 2× RTX 5060 Ti все 266 ответов получены без HTTP-ошибок и усечений;
 все четыре needle-запроса (до 182 244 токенов) пройдены. Выполнены 30 отдельных
 cold/cached prefill-проб; приведены cold backend rates. Контекст профиля — 262 144.
+¹⁷ Профиль EXL3 ограничен контекстом 98 304 токена (`max_seq_len` TabbyAPI): задания на 128k и 180k вернули HTTP 400 из-за превышения контекста, поэтому длинный контекст пройден 2/4, а prefill измерен только на 16k и 64k; на 128k и 180k все шесть проб на длину завершились ошибкой. Без этих двух ошибок точность — 97,35% (257/264). Усечён один ответ GSM8K (лимит 4096 токенов). Задания и их выбор совпадают с остальными прогонами профиля (`fixtures_sha256` одинаков). Время включает scored-часть и 30 prefill-проб. На коротких пробах `<512` повтор не набрал 50% переиспользованного кэша, поэтому `cached` для этой длины не приводится.
 
 ## Как добавить результат
 
