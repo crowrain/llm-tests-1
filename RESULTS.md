@@ -63,6 +63,7 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 | 2026-09-27–28 | DeepSeek V4 Flash 0731 **IQ3_XXS** | Vulkan + DSpark, Q8_0 KV, контекст 262k | 🟩 252/266 (94,74%)⁵ | 🟩 93/100 | 🟩 97/100 | 🟩 46/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟨 8 | 28,4 | нет данных | 49:30 | [JSON](runs/2026-09-27-deepseek-v4-flash-expanded/summary-deepseek-v4-flash-0731-iq3xxs-vulkan-dspark.json) |
 | 2026-09-28 | Qwen3.8 27B **Q4_K_XL** | Gufo + DFlash2, контекст 262k | 🟩 242/266 (90,98%)⁶ | 🟩 97/100 | 🟩 97/100 | 🟨 32/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 44,7 | нет данных | 58:28 | [JSON](runs/2026-09-28-qwen38-q4xl-gufo-expanded/summary-qwen38-27b-q4xl-gufo-dflash2.json) |
 | 2026-10-04 | Qwen3.8 27B **Q4_K_XL** | Gufo 0.6.0 + DFlash2, контекст 262k | 🟩 242/266 (90,98%)¹⁸ | 🟩 97/100 | 🟩 97/100 | 🟨 32/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 44,6 | 549,9 / 458,9 / 377,7 / 328,9 | 1:53:38 | [JSON](runs/2026-10-04-gufo-v060-expanded/summary-gufo-v060-qwen38-27b-q4xl-dflash2.json) · [prefill](runs/2026-10-04-gufo-v060-expanded/prefill-gufo-v060-qwen38-27b-q4xl-dflash2.jsonl) |
+| 2026-10-05 | Qwen3.8 Flash Next **HGN v2** | Halogen 0.16.2, нативный HGN, контекст 262k | 🟩 256/266 (96,24%)¹⁹ | 🟩 98/100 | 🟩 97/100 | 🟩 46/50 | 🟩 11/12 | 🟩 4/4 | 🟩 0 / 🟨 3 | 52,2 | 1 758,5 / 1 659,5 / 1 618,7 / 1 579,6 | 36:06 | [JSON](runs/2026-10-05-qwen38-flashnext-halogen-hgn-v2-expanded/summary-halogen-v0162-hgn-v2.json) · [prefill](runs/2026-10-05-qwen38-flashnext-halogen-hgn-v2-expanded/prefill-halogen-v0162-hgn-v2.jsonl) |
 | 2026-09-29 | Qwen3.8 Flash Next **IQ4 XS** | Halogen 0.12.0, MTP | 🟩 250/266 (93,98%)⁷ | 🟩 98/100 | 🟩 97/100 | 🟨 40/50 | 🟩 11/12 | 🟩 4/4 | 🟩 0 / 🟨 8 | 33,9 | нет данных | 39:30 | [JSON](runs/2026-09-29-qwen38-flashnext-halogen-expanded/summary-qwen38-flashnext-iq4xs-halogen.json) |
 | 2026-09-29 | Ling 3.0 Flash **Q5_K_M** | llama.cpp ROCm; контекст 196608, flash attention отключён | 🟨 237/266 (89,10%)⁸ | 🟩 93/100 | 🟩 92/100 | 🟨 41/50 | 🟥 8/12 | 🟨 3/4 | 🟨 1 / 🟥 21 | 32,4 | нет данных | 1:40:15 | [JSON](runs/2026-09-29-ling30-flash-q5km-expanded/summary-ling30-flash-q5km.json) |
 
@@ -122,6 +123,10 @@ cold/cached prefill-проб; приведены cold backend rates. Конте�
 строка от 2026-09-28. Все четыре needle-запроса пройдены; выполнены 30 cold/cached
 prefill-проб без ошибок. Приведены cold backend rates для фактически обработанных
 16k, 64k, 128k и 182k токенов.
+¹⁹ Прогон Halogen 0.16.2 использует родной checkpoint HGN v2 и те же закреплённые
+266 заданий и 30 cold/cached prefill-проб, что и прогон Gufo 0.6.0. Все четыре
+needle-запроса пройдены; cold backend rates приведены для 16k, 64k, 128k и 182k
+фактически обработанных токенов.
 
 ## Как добавить результат
 
