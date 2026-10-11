@@ -48,6 +48,17 @@ RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA 595.91.07. В 
 |---|---:|---:|---|---|
 | MMLU, 2026-09-30 | 🟩 49/50 (98%) | 🟩 0 / 0 | [JSON](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) | [62 токена](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/prefill-qwen38-ninfer-nvfp4-mmlu-4096.jsonl) |
 
+## Ryzen 7 5700X + RTX 4080 SUPER (Windows)
+
+Тестовый хост `5700X-ARC380`: **AMD Ryzen 7 5700X**, 8 ядер / 16 потоков. Установлено
+64 ГБ системной памяти (Windows сообщает 63,9 ГиБ); ОС — Windows 11 Pro. Графический
+ускоритель — **GeForce RTX 4080 SUPER 16 ГБ** (16 376 МиБ), PCIe 4.0 x16; драйвер
+NVIDIA 610.88.
+
+| Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
+| 2026-10-11 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER; Strata 0.1.43, MoE, MTP, KV int8, контекст 262k | 🟩 260/266 (97,74%)²⁰ | 🟩 97/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 88,5 | 3464,6 / 3472,6 / 3354,4 / 3241,2 | 27:52 | [JSON](runs/2026-10-11-strata-iq3xxs-expanded/summary-strata-iq3xxs-4080s.json) · [prefill](runs/2026-10-11-strata-iq3xxs-expanded/prefill-strata-iq3xxs-4080s.jsonl) |
+
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
 Хост `MS-S1 MAX` на базе **AMD Ryzen AI MAX+ 395**: 16 ядер / 32 потока,
@@ -127,6 +138,15 @@ prefill-проб без ошибок. Приведены cold backend rates дл
 266 заданий и 30 cold/cached prefill-проб, что и прогон Gufo 0.6.0. Все четыре
 needle-запроса пройдены; cold backend rates приведены для 16k, 64k, 128k и 182k
 фактически обработанных токенов.
+²⁰ Прогон Strata 0.1.43 на хосте `5700X-ARC380` использует те же закреплённые 266
+заданий и 30 prefill-проб, что и прогоны Strata от 2026-09-30 и 2026-10-01
+(`fixtures_sha256`, `probe_sha256` и системный промпт совпадают). Все 266 ответов
+получены без HTTP-ошибок и усечений, шесть ответов завершены, но неверны; все четыре
+needle-запроса (до 182 244 токенов) пройдены. Контекст — 262 144 токена, KV int8
+целиком в VRAM (KV streaming выключен); установщик Strata оценивал потребность профиля
+в ~70 ГБ RAM при 64 ГБ на хосте. Приведены cold backend rates; время включает
+scored-часть и 30 prefill-проб. На Windows харнесс запускался с `PYTHONUTF8=1`: без
+него запись `fixtures.json` падает на кодировке cp1251.
 
 ## Как добавить результат
 
