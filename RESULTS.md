@@ -16,12 +16,13 @@
 (Linux сообщает 125 ГиБ) и 8 ГБ swap. В опубликованных прогонах использовались
 отдельные PCIe-карты с собственной VRAM: **GeForce RTX 4080 SUPER 16 ГБ**
 (16 376 МиБ) и **2× GeForce RTX 5060 Ti 16 ГБ** (по 16 311 МиБ); драйвер NVIDIA
-595.91.07. На 2026-10-14 на хосте установлены только две RTX 5060 Ti. В каждом
+595.91.07 в прежних прогонах и 615.71.09 в прогоне Basalt 2026-11-02. На 2026-10-14 на хосте установлены только две RTX 5060 Ti. В каждом
 запуске использовалось указанное в колонке GPU сочетание; общий объём VRAM нельзя
 считать единым пулом без поддержки со стороны backend.
 
 | Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
+| 2026-11-02 | Qwen3.8 Flash-Next **GSQ-RCO IQ3_S** | 2× RTX 5060 Ti; Basalt с локальным патчем prompt split, GPU 1 основная, KV int8, контекст 262k | 🟩 260/266 (97,74%) | 🟩 98/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 150,2 | 2337,8 / 3160,3 / 3334,8 / 3237,5 | 20:00 | [отчёт](runs/2026-11-02-basalt-split-expanded/README.md) · [JSON](runs/2026-11-02-basalt-split-expanded/summary-basalt-split.json) · [prefill](runs/2026-11-02-basalt-split-expanded/prefill-basalt-split.jsonl) |
 | 2026-10-14 | Qwen3.8 Flash-Next **NVFP4 GPTQ** | 2× RTX 5060 Ti; Strata NVFP4, GPU 1 основная + GPU 0 кэш экспертов, KV int8 с 32K в VRAM, контекст 262k | 🟩 259/266 (97,37%)²¹ | 🟩 97/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 70,2 | 1595,0 / 1997,8 / 1913,6 / 1855,7 | 40:44 | [отчёт](runs/2026-10-14-strata-nvfp4-256k-kv32k-expanded/README.md) · [JSON](runs/2026-10-14-strata-nvfp4-256k-kv32k-expanded/summary-strata-nvfp4-5060ti2-256k-kv32k.json) · [prefill](runs/2026-10-14-strata-nvfp4-256k-kv32k-expanded/prefill-strata-nvfp4-5060ti2-256k-kv32k.jsonl) |
 | 2026-09-27 / 2026-09-30 | Qwen3.8 27B **NVFP4** | 2× RTX 5060 Ti; NInfer TP2, MTP | 🟩 258/266 (96,99%)¹² | 🟩 96/100 | 🟩 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 2¹² | 95,1 | 2512,3 / 1897,5 / 1424,0 / 1183,4¹⁰ | 37:30¹⁰ | [полный тест](runs/2026-09-27-qwen38-ninfer-expanded/summary-qwen38-ninfer-nvfp4-tp2-2x5060ti.json) · [повтор MMLU](runs/2026-09-30-qwen38-ninfer-nvfp4-mmlu-4096/summary-qwen38-ninfer-nvfp4-mmlu-4096.json) · [prefill](runs/2026-09-27-qwen38-ninfer-expanded/prefill-qwen38-ninfer-nvfp4-tp2-2x5060ti.jsonl) |
 | 2026-09-27 | Qwen3.8 27B **Q8_0 GGUF** | RTX 4080 SUPER + 2× RTX 5060 Ti; llama.cpp, MTP, tensor split | 🟩 243/266 (91,35%) | 🟩 96/100 | 🟩 97/100 | 🟨 34/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟥 18 | 81,2 | нет данных | 31:59 | [JSON](runs/2026-09-27-qwen38-q8-expanded/summary-qwen38-27b-q8-vision-mtp-tensor.json) |
