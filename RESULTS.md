@@ -61,6 +61,14 @@ NVIDIA 610.88.
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
 | 2026-10-11 | Qwen3.8-Flash-Next **IQ3_XXS** | RTX 4080 SUPER; Strata 0.1.43, MoE, MTP, KV int8, контекст 262k | 🟩 260/266 (97,74%)²⁰ | 🟩 97/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 88,5 | 3464,6 / 3472,6 / 3354,4 / 3241,2 | 27:52 | [JSON](runs/2026-10-11-strata-iq3xxs-expanded/summary-strata-iq3xxs-4080s.json) · [prefill](runs/2026-10-11-strata-iq3xxs-expanded/prefill-strata-iq3xxs-4080s.jsonl) |
 
+## Ryzen 7 5700X + RTX 4080 SUPER (Ubuntu Linux)
+
+Хост `x5700-rtx4080s`: **AMD Ryzen 7 5700X**, 8 ядер / 16 потоков, 121 ГиБ RAM. Ускоритель — **GeForce RTX 4080 SUPER 16 ГБ** (16 376 МиБ), драйвер NVIDIA 595.99.02; ОС Ubuntu 26.04.1 LTS.
+
+| Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
+| 2026-11-04 | Qwen3.8 Flash-Next **GSQ-RCO IQ3_S** | RTX 4080 SUPER; Strata 0.2.10, CUDA, MTP, KV int8 (32K resident), контекст 262k | 🟩 261/266 (98,12%)²² | 🟩 98/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 103.5 | 3348.3 / 3258.0 / 3162.9 / 3055.5 | 28:09 | [отчёт](runs/2026-11-04-strata-iq3s-linux-expanded/README.md) · [JSON](runs/2026-11-04-strata-iq3s-linux-expanded/summary-strata-iq3s-linux.json) · [prefill](runs/2026-11-04-strata-iq3s-linux-expanded/prefill-strata-iq3s-linux.jsonl) |
+
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
 Хост `MS-S1 MAX` на базе **AMD Ryzen AI MAX+ 395**: 16 ядер / 32 потока,
@@ -174,3 +182,5 @@ scored-часть и 30 prefill-проб. На Windows харнесс запус
 
 [Подробнее о четырёх конфигурациях Qwen3.8](runs/2026-09-27-qwen38-expanded/README.md) ·
 [Код теста](test_quality_expanded_1.py)
+
+²² Прогон Strata 0.2.10 на Ubuntu 26.04.1, Ryzen 7 5700X и RTX 4080 SUPER использует тот же набор из 266 заданий, probe fixtures и system prompt, что опубликованный прогон 2026-11-02 (SHA-256 совпадают). MTP включён, контекст 262144, KV int8 с 32768 resident-токенами и PLE I/O в RAM. Все запросы завершились без HTTP-ошибок и усечений; пять ответов неверны, все четыре needle-задания пройдены вплоть до 182244 токенов. Выполнены 30 cold/cached prefill-проб; приведены cold backend rates. Время включает 266 заданий и prefill-пробы.
