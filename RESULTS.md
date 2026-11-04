@@ -68,6 +68,7 @@ NVIDIA 610.88.
 | Дата | Модель и квант | Использование GPU / backend | Верно | GSM8K | ARC | MMLU | JSON | Контекст | Ошибки / усечения | Decode backend, ток/с | Cold prefill backend, ток/с (16K / 64K / 128K / 180K) | Время | Сводка |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|
 | 2026-11-04 | Qwen3.8 Flash-Next **GSQ-RCO IQ3_S** | RTX 4080 SUPER; Strata 0.2.10, CUDA, MTP, KV int8 (32K resident), контекст 262k | 🟩 261/266 (98,12%)²² | 🟩 98/100 | 🟩 98/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 103.5 | 3348.3 / 3258.0 / 3162.9 / 3055.5 | 28:09 | [отчёт](runs/2026-11-04-strata-iq3s-linux-expanded/README.md) · [JSON](runs/2026-11-04-strata-iq3s-linux-expanded/summary-strata-iq3s-linux.json) · [prefill](runs/2026-11-04-strata-iq3s-linux-expanded/prefill-strata-iq3s-linux.jsonl) |
+| 2026-11-04 | Qwen3.8 Flash-Next **GSQ-RCO IQ3_S** | RTX 4080 SUPER; Strata 0.2.10, CUDA, MTP, gpu-unlock 2.0.0, KV int8 (32K resident), контекст 262k | 🟩 260/266 (97,74%) | 🟩 98/100 | 🟨 97/100 | 🟩 49/50 | 🟩 12/12 | 🟩 4/4 | 🟩 0 / 🟩 0 | 102.4 | 3579.3 / 3484.5 / 3350.3 / 3230.4 | 26:07 | [отчёт](runs/2026-11-04-strata-iq3s-linux-gpu-unlock-expanded/README.md) · [JSON](runs/2026-11-04-strata-iq3s-linux-gpu-unlock-expanded/summary-strata-iq3s-linux-gpu-unlock.json) · [prefill](runs/2026-11-04-strata-iq3s-linux-gpu-unlock-expanded/prefill-strata-iq3s-linux-gpu-unlock.jsonl) |
 
 ## MS-S1 MAX — Ryzen AI MAX+ 395 / Radeon 8060S
 
